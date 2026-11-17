@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leahe"
+version = "1.0.0"
+description = "Leahe: A terminal utility for CBT-based mood tracking, thought records, and statistics without emojis."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.0",
+    "rich>=12.0",
+]
+
+[project.scripts]
+leahe = "leahe.cli:main"
+mood = "leahe.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
