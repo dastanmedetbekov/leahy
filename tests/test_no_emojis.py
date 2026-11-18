@@ -12,6 +12,7 @@ def test_strictly_no_emojis():
     python_files = list(project_root.glob("src/leahe/**/*.py")) + [
         project_root / "main.py",
         project_root / "leahe",
+        project_root / "leahy",
         project_root / "mood",
     ]
 

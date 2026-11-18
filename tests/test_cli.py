@@ -61,3 +61,10 @@ def test_cli_seed_and_stats(tmp_path: Path):
     assert exp_res.exit_code == 0
     assert export_file.exists()
     assert "CBT Mood & Thought Records Export" in export_file.read_text(encoding="utf-8")
+
+    # Export yaml
+    export_yaml_file = tmp_path / "out.yaml"
+    exp_yaml_res = runner.invoke(main, ["--db", str(db_file), "export", "-f", "yaml", "-o", str(export_yaml_file)])
+    assert exp_yaml_res.exit_code == 0
+    assert export_yaml_file.exists()
+    assert "initial_mood" in export_yaml_file.read_text(encoding="utf-8")

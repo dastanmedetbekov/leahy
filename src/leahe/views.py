@@ -12,7 +12,15 @@ from rich.panel import Panel
 from rich.text import Text
 from rich import box
 
-from .models import MoodEntry
+from .models import (
+    MoodEntry,
+    ActionItem,
+    AntiProcrastinationTask,
+    DASAssessment,
+    BehavioralExperiment,
+    ExposureStep,
+    ExposureLadder,
+)
 from .cbt_data import COGNITIVE_DISTORTIONS, DistortionInfo
 from .burns_methods import BURNS_METHODS, BurnsMethod
 from .stats import render_ascii_bar_chart, render_mood_timeline
@@ -67,7 +75,14 @@ def render_entries_table(entries: List[MoodEntry], total_count: Optional[int] = 
 
     for entry in entries:
         dt_str = entry.parsed_datetime.strftime("%Y-%m-%d %H:%M")
-        etype = "[cyan]CBT[/cyan]" if entry.is_cbt else "[dim]Quick[/dim]"
+        if entry.is_cbt:
+            etype = "[cyan]CBT[/cyan]"
+        elif entry.entry_type == "credit":
+            etype = "[bold green]Win[/bold green]"
+        elif entry.entry_type == "note":
+            etype = "[magenta]Note[/magenta]"
+        else:
+            etype = "[dim]Quick[/dim]"
         mood_str = format_mood_badge(entry.initial_mood)
         if entry.is_cbt and entry.final_mood is not None:
             mood_str += f" -> {format_mood_badge(entry.final_mood)}"
@@ -323,7 +338,44 @@ def render_statistics_dashboard(stats: Dict[str, Any], entries: List[MoodEntry])
             )
         console.print(tech_table)
 
-    # 6. Mood Timeline Plot
+    # 6. Tag & Trigger Analytics
+    tags = stats.get("tags", [])
+    if tags:
+        tag_table = Table(
+            title="Tags & Triggers Analysis",
+            box=box.ROUNDED,
+            header_style="bold green",
+        )
+        tag_table.add_column("Tag / Context", justify="left", width=22)
+        tag_table.add_column("Entries", justify="right", width=10)
+        tag_table.add_column("Avg Mood", justify="center", width=14)
+        tag_table.add_column("Primary Distortion Trap", justify="left", width=34)
+
+        for tg in tags:
+            tag_table.add_row(
+                f"#{tg['tag']}",
+                str(tg["count"]),
+                format_mood_badge(round(tg["avg_mood"])),
+                f"[magenta]{tg['top_distortion']}[/magenta]",
+            )
+        console.print(tag_table)
+
+    # 7. Energy Correlation & Temporal Heatmap
+    hi_e = stats.get("avg_mood_high_energy")
+    lo_e = stats.get("avg_mood_low_energy")
+    if hi_e is not None or lo_e is not None:
+        corr_table = Table(box=box.SIMPLE, show_header=False, expand=True)
+        corr_table.add_column("Factor", style="bold")
+        corr_table.add_column("Impact")
+
+        if hi_e is not None:
+            corr_table.add_row("When Energy is High (>= 7/10):", f"Average Mood is {format_mood_badge(round(hi_e))}")
+        if lo_e is not None:
+            corr_table.add_row("When Energy is Depleted (<= 4/10):", f"Average Mood is {format_mood_badge(round(lo_e))}")
+
+        console.print(Panel(corr_table, title="[bold]Physiological Energy & Mood Correlation[/bold]", box=box.ROUNDED, border_style="yellow"))
+
+    # 8. Mood Timeline Plot
     timeline_lines = render_mood_timeline(entries, limit=18)
     timeline_panel = Panel(
         Text("\n".join(timeline_lines)),
@@ -386,7 +438,7 @@ def render_burns_methods_catalog():
         console.print(panel)
 
 def render_audit_verification(entries: List[MoodEntry]):
-    """Detailed verification/audit ('проверка') of emotional patterns and unresolved thoughts."""
+    """Detailed verification/audit of emotional patterns and unresolved thoughts."""
     print_header("CBT Thought Pattern & Mood Verification Audit", subtitle="In-depth clinical pattern analysis of logged entries")
 
     if not entries:
@@ -452,3 +504,251 @@ def render_audit_verification(entries: List[MoodEntry]):
                 insight_content.append(f"  [-] {q}\n")
 
         console.print(Panel(insight_content, title="[bold]Pattern Verification Insight[/bold]", box=box.ROUNDED, border_style="yellow"))
+
+def render_actions_table(actions: List[ActionItem]):
+    print_header("Constructive Action Steps Tracker", subtitle="Behavioral activation micro-steps formulated during CBT thought restructuring")
+
+    if not actions:
+        console.print("[yellow][*] No action steps recorded yet. Formulate action steps in CBT sessions with 'leahe check --cbt'.[/yellow]")
+        return
+
+    table = Table(box=box.ROUNDED, header_style="bold cyan", show_lines=True)
+    table.add_column("Status", justify="center", width=8)
+    table.add_column("ID", justify="right", width=4)
+    table.add_column("Created Date", width=14)
+    table.add_column("Action Step", justify="left")
+
+    for a in actions:
+        status_badge = "[bold green][x] DONE[/bold green]" if a.is_done else "[yellow][ ] PENDING[/yellow]"
+        date_str = a.created_at[:10]
+        table.add_row(status_badge, str(a.id), date_str, a.action_text)
+
+    console.print(table)
+    console.print("[dim]Use 'leahe actions --done <id>' to mark an action item as completed.[/dim]\n")
+
+def render_procrastination_tasks_table(tasks: List[AntiProcrastinationTask]):
+    print_header("David Burns Anti-Procrastination Sheet", subtitle="Empirical testing of predicted vs actual difficulty and satisfaction")
+
+    if not tasks:
+        console.print("[yellow][*] No tasks logged yet. Predict task difficulty before starting with 'leahe predict'.[/yellow]")
+        return
+
+    table = Table(box=box.ROUNDED, header_style="bold cyan", show_lines=True)
+    table.add_column("ID", justify="right", width=4)
+    table.add_column("Status", justify="center", width=11, no_wrap=True)
+    table.add_column("Activity", justify="left")
+    table.add_column("Difficulty", justify="center", width=14)
+    table.add_column("Pleasure", justify="center", width=14)
+    table.add_column("Shift vs Dread", justify="left")
+
+    for t in tasks:
+        if t.is_completed:
+            status_str = "[bold green]COMPLETED[/bold green]"
+            diff_str = f"{t.predicted_difficulty}% -> [bold green]{t.actual_difficulty}%[/bold green]"
+            pleas_str = f"{t.predicted_pleasure}% -> [bold green]{t.actual_pleasure}%[/bold green]"
+
+            shift_notes = []
+            if t.difficulty_delta and t.difficulty_delta > 0:
+                shift_notes.append(f"Easier by {t.difficulty_delta}%")
+            if t.pleasure_delta and t.pleasure_delta > 0:
+                shift_notes.append(f"Pleasanter by +{t.pleasure_delta}%")
+            delusion_text = ", ".join(shift_notes) if shift_notes else "Accurately predicted"
+        else:
+            status_str = "[yellow]PENDING[/yellow]"
+            diff_str = f"{t.predicted_difficulty}% -> [dim]--[/dim]"
+            pleas_str = f"{t.predicted_pleasure}% -> [dim]--[/dim]"
+            delusion_text = "[dim]Run 'leahe complete-task <id>'[/dim]"
+
+        table.add_row(str(t.id), status_str, t.task_name, diff_str, pleas_str, delusion_text)
+
+    console.print(table)
+
+    completed = [t for t in tasks if t.is_completed]
+    pending = [t for t in tasks if not t.is_completed]
+
+    if completed:
+        pleas_deltas = [t.pleasure_delta for t in completed if t.pleasure_delta is not None]
+        diff_deltas = [t.difficulty_delta for t in completed if t.difficulty_delta is not None]
+        avg_pleas = sum(pleas_deltas) / len(pleas_deltas) if pleas_deltas else 0
+        avg_diff = sum(diff_deltas) / len(diff_deltas) if diff_deltas else 0
+
+        p_str = f"+{avg_pleas:.1f}%" if avg_pleas > 0 else f"{avg_pleas:.1f}%"
+        d_str = f"{avg_diff:.1f}% easier" if avg_diff > 0 else f"{abs(avg_diff):.1f}% harder"
+
+        console.print(f"\n[bold]Summary Analysis:[/bold] [green]{len(completed)} completed[/green] | [yellow]{len(pending)} pending[/yellow]")
+        console.print(f"  [+] Average Pleasure Reality Boost: [bold green]{p_str}[/bold green] more satisfying than predicted")
+        console.print(f"  [+] Average Difficulty Reality Shift: [bold green]{d_str}[/bold green] than feared")
+        console.print("[dim]Cognitive Insight: Your brain consistently underestimates your ability to enjoy activities before starting them.[/dim]")
+
+    console.print("\n[dim]Use 'leahy predict' to log activities and 'leahy complete <id>' to record outcomes.[/dim]\n")
+
+def render_weekly_review(entries: List[MoodEntry], actions: List[ActionItem], stats: Dict[str, Any]):
+    print_header("Weekly CBT Clinical Retrospective", subtitle="Comprehensive 7-day emotional growth and cognitive restructuring review")
+
+    from datetime import datetime, timedelta
+    seven_days_ago = datetime.now() - timedelta(days=7)
+    recent_entries = [e for e in entries if e.parsed_datetime >= seven_days_ago]
+
+    if not recent_entries:
+        console.print("[yellow][*] No entries found for the past 7 days. Start logging daily check-ins with 'leahe check'.[/yellow]")
+        return
+
+    cbt_entries = [e for e in recent_entries if e.is_cbt]
+    avg_mood = sum(e.initial_mood for e in recent_entries) / len(recent_entries)
+
+    # 1. Digest Card
+    digest_table = Table(box=box.SIMPLE, show_header=False, expand=True)
+    digest_table.add_column("Metric", style="bold")
+    digest_table.add_column("Value")
+    digest_table.add_column("Metric", style="bold")
+    digest_table.add_column("Value")
+
+    digest_table.add_row("Total Logs This Week:", str(len(recent_entries)), "Average Mood:", format_mood_badge(round(avg_mood)))
+    digest_table.add_row("CBT Restructuring Sessions:", str(len(cbt_entries)), "Active Days:", f"{len({e.parsed_datetime.date() for e in recent_entries})}/7 days")
+
+    console.print(Panel(digest_table, title="[bold]7-Day Activity Digest[/bold]", box=box.ROUNDED, border_style="cyan"))
+
+    # 2. CBT Success Rate This Week
+    cbt_outcomes = [e for e in cbt_entries if e.final_mood is not None]
+    if cbt_outcomes:
+        improved = sum(1 for e in cbt_outcomes if e.final_mood > e.initial_mood)
+        rate = (improved / len(cbt_outcomes)) * 100
+        shift_avg = sum(e.mood_delta for e in cbt_outcomes if e.mood_delta is not None) / len(cbt_outcomes)
+
+        cbt_text = Text()
+        cbt_text.append(f"  Sessions with Mood Improvement: {improved}/{len(cbt_outcomes)} ({rate:.1f}% success rate)\n", style="bold green")
+        cbt_text.append(f"  Average Mood Boost Post-Restructuring: {format_delta_badge(round(shift_avg))}\n")
+        console.print(Panel(cbt_text, title="[bold]Restructuring Efficacy This Week[/bold]", box=box.ROUNDED, border_style="green"))
+
+    # 3. Pending Actions
+    pending_actions = [a for a in actions if not a.is_done]
+    if pending_actions:
+        console.print(f"\n[bold yellow]Pending Action Commitments ({len(pending_actions)}):[/bold yellow]")
+        for a in pending_actions[:4]:
+            console.print(f"  [ ] [cyan]#{a.id}[/cyan]: {a.action_text}")
+    else:
+        console.print("\n[bold green][+] Great job: All action commitments are completed![/bold green]")
+
+    # 4. Weekly Reflection Prompt
+    reflection_panel = Panel(
+        "Socratic Reflection for Next Week:\n"
+        "1. What is one automatic thought that appeared repeatedly this week?\n"
+        "2. Which David Burns technique offered the greatest sense of clarity and relief?\n"
+        "3. What is one compassionate standard you will adopt for yourself moving forward?",
+        title="[bold]Weekly Reflection Catalyst[/bold]",
+        box=box.ROUNDED,
+        border_style="magenta",
+    )
+    console.print(reflection_panel)
+
+def render_experiments_table(experiments: List[BehavioralExperiment]):
+    print_header("Behavioral Experiments Lab", subtitle="Empirical real-world testing of catastrophic fear predictions")
+
+    if not experiments:
+        console.print("[yellow][*] No behavioral experiments logged yet. Design your first experiment with 'leahy experiment new'.[/yellow]\n")
+        return
+
+    table = Table(box=box.ROUNDED, header_style="bold cyan", show_lines=True)
+    table.add_column("ID", justify="right", width=4)
+    table.add_column("Status", justify="center", width=11, no_wrap=True)
+    table.add_column("Experiment Title & Feared Catastrophe", justify="left")
+    table.add_column("Belief %", justify="center", width=10)
+    table.add_column("Actual Reality", justify="left", width=26)
+    table.add_column("Reality vs Dread", justify="center", width=16)
+
+    completed = [e for e in experiments if e.is_completed]
+    disproven = [e for e in completed if not e.fear_realized]
+
+    for e in experiments:
+        if e.is_completed:
+            status_str = "[bold green]COMPLETED[/bold green]"
+            pred_str = f"{e.predicted_belief}%"
+            outcome_str = f"[bold]{e.actual_outcome or 'Done'}[/bold]"
+            if e.actual_severity is not None:
+                outcome_str += f" (Severity: {e.actual_severity}%)"
+
+            if e.prediction_error and e.prediction_error > 0:
+                shift_str = f"[bold green]+{e.prediction_error}% better[/bold green]"
+            elif e.prediction_error and e.prediction_error < 0:
+                shift_str = f"[red]{e.prediction_error}%[/red]"
+            else:
+                shift_str = "As predicted"
+        else:
+            status_str = "[yellow]PENDING[/yellow]"
+            pred_str = f"{e.predicted_belief}%"
+            outcome_str = f"[dim]Action: {e.experiment_plan}[/dim]"
+            shift_str = "[dim]Run complete[/dim]"
+
+        title_desc = f"[bold]{e.title}[/bold]\n[dim]Fear: \"{e.fear_prediction}\"[/dim]"
+        table.add_row(str(e.id), status_str, title_desc, pred_str, outcome_str, shift_str)
+
+    console.print(table)
+
+    if completed:
+        disproven_rate = (len(disproven) / len(completed)) * 100
+        errors = [e.prediction_error for e in completed if e.prediction_error is not None]
+        avg_gap = sum(errors) / len(errors) if errors else 0
+        gap_str = f"+{avg_gap:.1f}%" if avg_gap > 0 else f"{avg_gap:.1f}%"
+
+        console.print(f"\n[bold]Empirical Fear Prediction Audit:[/bold] [green]{len(completed)} completed[/green] | [yellow]{len(experiments) - len(completed)} pending[/yellow]")
+        console.print(f"  [+] Fear Disconfirmation Rate: [bold green]{disproven_rate:.1f}%[/bold green] (Catastrophe failed to materialize in {len(disproven)}/{len(completed)} trials)")
+        console.print(f"  [+] Average Fear Overestimation: [bold green]{gap_str}[/bold green] (Reality was {gap_str} better than feared)")
+        console.print("[dim]Clinical Takeaway: Your anxiety paints catastrophic worst-case illusions. Direct empirical testing consistently disproves them.[/dim]")
+
+    console.print("\n[dim]Use 'leahy experiment new' to test a fear and 'leahy experiment complete <id>' to record the outcome.[/dim]\n")
+
+def render_exposure_ladders(ladders: List[ExposureLadder]):
+    print_header("Exposure Hierarchy & Fear Ladders", subtitle="Systematic desensitization and habituation tracking (SUDS 0-100)")
+
+    if not ladders:
+        console.print("[yellow][*] No exposure ladders created yet. Build your first fear hierarchy with 'leahy ladder new'.[/yellow]\n")
+        return
+
+    for ladder in ladders:
+        console.print(Panel(
+            f"[bold cyan]Fear Hierarchy #{ladder.id}: {ladder.fear_theme}[/bold cyan]" + (f"\n[dim]{ladder.notes}[/dim]" if ladder.notes else ""),
+            box=box.ROUNDED,
+            border_style="cyan",
+        ))
+
+        if not ladder.steps:
+            console.print("  [dim]No steps added yet. Add steps with 'leahy ladder add-step " + str(ladder.id) + " <description> --suds <0-100>'.[/dim]\n")
+            continue
+
+        table = Table(box=box.SIMPLE_HEAD, show_lines=False, expand=True)
+        table.add_column("Step", justify="right", width=6)
+        table.add_column("Status", justify="center", width=12)
+        table.add_column("Target SUDS", justify="center", width=12)
+        table.add_column("Exposure Activity / Challenge", justify="left")
+        table.add_column("Reps Done", justify="center", width=11)
+        table.add_column("Last Habituation (Pre -> Post)", justify="center", width=30)
+
+        for step in ladder.steps:
+            if step.status == "mastered":
+                status_str = "[bold green][MASTERED][/bold green]"
+            elif step.status == "in_progress":
+                status_str = "[bold yellow][ACTIVE][/bold yellow]"
+            else:
+                status_str = "[dim][PENDING][/dim]"
+
+            suds_badge = f"[bold magenta]{step.target_suds}/100[/bold magenta]"
+
+            if step.last_pre_suds is not None and step.last_post_suds is not None:
+                hab = step.habituation_delta
+                hab_str = f"{step.last_pre_suds} -> [bold green]{step.last_post_suds}[/bold green] (Relief: -{hab})" if (hab and hab > 0) else f"{step.last_pre_suds} -> {step.last_post_suds}"
+            else:
+                hab_str = "[dim]Not practiced yet[/dim]"
+
+            table.add_row(
+                f"#{step.id}",
+                status_str,
+                suds_badge,
+                step.description,
+                str(step.repetitions_done),
+                hab_str,
+            )
+
+        console.print(table)
+        console.print(f"[dim]Practice step: 'leahy ladder practice <step_id>' | Add step: 'leahy ladder add-step {ladder.id} <desc> --suds <0-100>'[/dim]\n")
+
+

@@ -1,0 +1,8 @@
+[Unit]
+Description=Leahe CBT Practice & Mood Notification Service
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/leahy notify
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"

@@ -1,14 +1,65 @@
-"""Export tools for CBT mood records (Markdown and JSON formats).
+"""Export tools for CBT mood records (Markdown, YAML, and JSON formats).
 
 Strictly NO emojis.
 """
 
 import json
+import yaml
 from pathlib import Path
 from typing import List
 from .models import MoodEntry
 from .cbt_data import COGNITIVE_DISTORTIONS
 from .burns_methods import BURNS_METHODS
+
+def export_to_yaml(entries: List[MoodEntry], file_path: Path) -> None:
+    data = []
+    for e in entries:
+        item = {
+            "id": e.id,
+            "timestamp": e.timestamp,
+            "entry_type": e.entry_type,
+            "initial_mood": e.initial_mood,
+            "primary_emotion": e.primary_emotion,
+            "emotion_intensity_initial": e.emotion_intensity_initial,
+        }
+        if e.final_mood is not None:
+            item["final_mood"] = e.final_mood
+            item["mood_delta"] = e.final_mood - e.initial_mood
+        if e.emotion_intensity_final is not None:
+            item["emotion_intensity_final"] = e.emotion_intensity_final
+            item["relief_percent"] = e.emotion_intensity_initial - e.emotion_intensity_final
+        if e.energy_level is not None:
+            item["energy_level"] = e.energy_level
+        if e.situation:
+            item["situation"] = e.situation
+        if e.automatic_thought:
+            item["automatic_thought"] = e.automatic_thought
+        if e.belief_initial is not None:
+            item["belief_initial"] = e.belief_initial
+        if e.distortions:
+            item["distortions"] = e.distortions
+        if e.evidence_for:
+            item["evidence_for"] = e.evidence_for
+        if e.evidence_against:
+            item["evidence_against"] = e.evidence_against
+        if e.alternative_thought:
+            item["alternative_thought"] = e.alternative_thought
+        if e.belief_final is not None:
+            item["belief_final"] = e.belief_final
+        if e.technique_used:
+            item["technique_used"] = e.technique_used
+        if e.technique_details:
+            item["technique_details"] = e.technique_details
+        if e.action_plan:
+            item["action_plan"] = e.action_plan
+        if e.tags:
+            item["tags"] = e.tags
+        if e.notes:
+            item["notes"] = e.notes
+        data.append(item)
+
+    file_path.write_text(yaml.dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
 
 def export_to_json(entries: List[MoodEntry], file_path: Path) -> None:
     data = []

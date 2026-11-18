@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 
-from .models import MoodEntry
+from .models import MoodEntry, BehavioralExperiment
 from .cbt_data import COGNITIVE_DISTORTIONS
 from .burns_methods import BURNS_METHODS
 
@@ -142,6 +142,68 @@ def calculate_summary_stats(entries: List[MoodEntry]) -> Dict[str, Any]:
             "avg_distress_relief": avg_relief,
         })
 
+    # Tags breakdown & Trigger analysis
+    tag_counts = Counter()
+    tag_moods = defaultdict(list)
+    tag_distortions = defaultdict(list)
+
+    for e in entries:
+        for t in e.tags:
+            tag_clean = t.lower()
+            tag_counts[tag_clean] += 1
+            tag_moods[tag_clean].append(e.initial_mood)
+            if e.distortions:
+                tag_distortions[tag_clean].extend(e.distortions)
+
+    tag_stats = []
+    for tag_name, count in tag_counts.most_common(10):
+        avg_t_mood = sum(tag_moods[tag_name]) / len(tag_moods[tag_name])
+        top_d_code = Counter(tag_distortions[tag_name]).most_common(1)
+        top_d_name = COGNITIVE_DISTORTIONS[top_d_code[0][0]].name if (top_d_code and top_d_code[0][0] in COGNITIVE_DISTORTIONS) else "None"
+        tag_stats.append({
+            "tag": tag_name,
+            "count": count,
+            "avg_mood": avg_t_mood,
+            "top_distortion": top_d_name,
+        })
+
+    # Energy vs Mood Correlation
+    entries_with_energy = [e for e in entries if e.energy_level is not None]
+    high_energy = [e.initial_mood for e in entries_with_energy if e.energy_level >= 7]
+    low_energy = [e.initial_mood for e in entries_with_energy if e.energy_level <= 4]
+    avg_mood_high_energy = sum(high_energy) / len(high_energy) if high_energy else None
+    avg_mood_low_energy = sum(low_energy) / len(low_energy) if low_energy else None
+
+    # Day of Week & Time of Day
+    days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_moods = defaultdict(list)
+    tod_moods = defaultdict(list)
+
+    for e in entries:
+        dt = e.parsed_datetime
+        day_name = dt.strftime("%A")
+        day_moods[day_name].append(e.initial_mood)
+
+        hour = dt.hour
+        if 5 <= hour < 12:
+            period = "Morning (05-12)"
+        elif 12 <= hour < 17:
+            period = "Afternoon (12-17)"
+        elif 17 <= hour < 22:
+            period = "Evening (17-22)"
+        else:
+            period = "Night (22-05)"
+        tod_moods[period].append(e.initial_mood)
+
+    day_stats = [
+        {"day": d, "count": len(day_moods[d]), "avg_mood": (sum(day_moods[d]) / len(day_moods[d])) if day_moods[d] else 0.0}
+        for d in days_order if day_moods[d]
+    ]
+    tod_stats = [
+        {"period": p, "count": len(tod_moods[p]), "avg_mood": (sum(tod_moods[p]) / len(tod_moods[p])) if tod_moods[p] else 0.0}
+        for p in ["Morning (05-12)", "Afternoon (12-17)", "Evening (17-22)", "Night (22-05)"] if tod_moods[p]
+    ]
+
     # Streaks and Dates
     sorted_entries = sorted(entries, key=lambda x: x.parsed_datetime)
     first_date = sorted_entries[0].parsed_datetime.date()
@@ -174,6 +236,11 @@ def calculate_summary_stats(entries: List[MoodEntry]) -> Dict[str, Any]:
         "distortions": distortion_stats,
         "emotions": emotion_stats,
         "techniques": technique_stats,
+        "tags": tag_stats,
+        "avg_mood_high_energy": avg_mood_high_energy,
+        "avg_mood_low_energy": avg_mood_low_energy,
+        "days": day_stats,
+        "times_of_day": tod_stats,
         "first_date": first_date.isoformat(),
         "last_date": last_date.isoformat(),
         "days_span": days_span,
@@ -270,3 +337,40 @@ def render_mood_timeline(entries: List[MoodEntry], limit: int = 20) -> List[str]
     lines.append("  Legend: [o] Initial mood  [*] CBT pre-mood  [+] Post-CBT re-rate  [.] Empty")
 
     return lines
+
+
+def calculate_experiment_stats(experiments: List[BehavioralExperiment]) -> Dict[str, Any]:
+    """Calculate statistical efficacy and prediction accuracy for behavioral experiments."""
+    if not experiments:
+        return {"total": 0}
+
+    completed = [e for e in experiments if e.is_completed]
+    disproven = [e for e in completed if not e.fear_realized]
+
+    total = len(experiments)
+    completed_count = len(completed)
+
+    avg_predicted = (
+        sum(e.predicted_belief for e in completed) / completed_count
+        if completed_count else 0.0
+    )
+    avg_severity = (
+        sum(e.actual_severity for e in completed if e.actual_severity is not None) / completed_count
+        if completed_count else 0.0
+    )
+    errors = [e.prediction_error for e in completed if e.prediction_error is not None]
+    avg_gap = sum(errors) / len(errors) if errors else 0.0
+
+    disproven_rate = (len(disproven) / completed_count * 100) if completed_count else 0.0
+
+    return {
+        "total": total,
+        "completed": completed_count,
+        "pending": total - completed_count,
+        "disproven_count": len(disproven),
+        "disproven_rate": disproven_rate,
+        "avg_predicted_belief": avg_predicted,
+        "avg_actual_severity": avg_severity,
+        "avg_prediction_gap": avg_gap,
+    }
+

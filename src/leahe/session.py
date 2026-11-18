@@ -3,6 +3,7 @@
 Strictly NO emojis. Clean ASCII prompts.
 """
 
+from datetime import datetime
 from typing import List, Optional, Tuple
 from rich.console import Console
 from rich.panel import Panel
@@ -10,10 +11,20 @@ from rich.prompt import Prompt, IntPrompt
 from rich.text import Text
 from rich import box
 
-from .models import MoodEntry
+from .models import (
+    MoodEntry,
+    ActionItem,
+    AntiProcrastinationTask,
+    DASAssessment,
+    BehavioralExperiment,
+    ExposureStep,
+    ExposureLadder,
+)
 from .database import Database
 from .cbt_data import COGNITIVE_DISTORTIONS, STANDARD_EMOTIONS, SOCRATIC_QUESTIONS
 from .burns_methods import BURNS_METHODS, BurnsMethod
+from .das import DAS_QUESTIONS, DOMAIN_ANTIDOTES
+from .quality_check import evaluate_rational_response
 from .views import print_header, format_mood_badge, format_delta_badge
 
 console = Console()
@@ -63,46 +74,104 @@ def select_emotion() -> Tuple[str, int]:
 
 def select_distortions() -> List[str]:
     console.print("\n[bold cyan]=== IDENTIFY COGNITIVE DISTORTIONS ===[/bold cyan]")
-    console.print("[dim]Select which cognitive distortions appear in this automatic thought (enter numbers separated by commas, e.g. 1, 7):[/dim]\n")
+    console.print("[dim]I will ask you about each cognitive distortion one by one. Answer yes (y) or no (n).[/dim]\n")
 
     dist_keys = list(COGNITIVE_DISTORTIONS.keys())
-    for idx, key in enumerate(dist_keys, 1):
+    selected = []
+
+    for key in dist_keys:
         d = COGNITIVE_DISTORTIONS[key]
-        console.print(f"  [{idx:>2}] [bold magenta]{d.name}[/bold magenta]: [dim]{d.summary}[/dim]")
+        console.print(f"[bold magenta]{d.name}[/bold magenta]")
+        console.print(f"  [dim]{d.description}[/dim]")
+        console.print(f"  [dim]Example: {d.example}[/dim]")
+        answer = Prompt.ask(
+            f"  [bold cyan]Do you notice this pattern in your thought?[/bold cyan] [dim](y/n)[/dim]",
+            default="n",
+        ).strip().lower()
+        if answer in ("y", "yes"):
+            selected.append(key)
+            console.print(f"  [green][+] Noted: {d.name}[/green]\n")
+        else:
+            console.print(f"  [dim][-] Skipped.[/dim]\n")
 
-    console.print("  [ 0] None / Skip identification\n")
+    if selected:
+        console.print("[bold green][+] Identified Distortions:[/bold green]")
+        for code in selected:
+            console.print(f"    [*] [magenta]{COGNITIVE_DISTORTIONS[code].name}[/magenta]")
+    else:
+        console.print("[dim]No distortions identified.[/dim]")
 
-    while True:
-        raw = Prompt.ask("[bold cyan]Enter distortion numbers (e.g. 1, 3, 7)[/bold cyan]").strip()
-        if not raw or raw == "0":
-            return []
+    return selected
 
-        selected = []
-        valid = True
-        for part in raw.replace(";", ",").split(","):
-            part = part.strip()
-            if not part:
-                continue
+def prompt_evidence_against(auto_thought: str, distortions: List[str], db: Optional[Database] = None) -> str:
+    """Prompt for contradictory evidence with interactive Socratic scaffolding if stuck."""
+    console.print("\n[dim]Prompt B: What objective facts contradict or weaken this thought? (What would you tell a friend? Type '?' for Socratic hints)[/dim]")
+    val = Prompt.ask("[bold]Evidence Against the Thought[/bold]").strip()
+
+    while not val or val.lower() in ("?", "help", "hint"):
+        console.print("\n[bold yellow][*] Socratic Reflection Scaffolding (Clinical Angles):[/bold yellow]")
+        console.print("  [1] Friend Lens: What compassionate, realistic facts would you tell a friend with this thought?")
+        console.print("  [2] Past Experience: What actually happened the last time you feared this outcome?")
+        console.print("  [3] Alternative Explanations: What are 2-3 other plausible, mundane reasons for this situation?")
+        console.print("  [4] Coping Capacity: Even if the worst occurred, how would you realistically endure and cope?")
+
+        if db:
             try:
-                num = int(part)
-                if 1 <= num <= len(dist_keys):
-                    code = dist_keys[num - 1]
-                    if code not in selected:
-                        selected.append(code)
-                else:
-                    console.print(f"[red][!] Number {num} is out of range (1-{len(dist_keys)}).[/red]")
-                    valid = False
-            except ValueError:
-                console.print(f"[red][!] Invalid input '{part}'. Please enter numbers.[/red]")
-                valid = False
+                past = db.list_entries(limit=5, entry_type="cbt_record")
+                matching = [p for p in past if p.alternative_thought and (set(p.distortions) & set(distortions))]
+                if matching:
+                    console.print(f"\n  [dim]Relevant reframe from your past records:[/dim]")
+                    console.print(f"  [green]  \"{matching[0].alternative_thought}\"[/green]")
+            except Exception:
+                pass
 
-        if valid and selected:
-            console.print("\n[bold green][+] Identified Distortions:[/bold green]")
-            for code in selected:
-                console.print(f"    [*] [magenta]{COGNITIVE_DISTORTIONS[code].name}[/magenta]")
-            return selected
-        elif valid and not selected:
-            return []
+        console.print()
+        lens = Prompt.ask("[bold cyan]Select an angle (1-4) or enter your evidence directly[/bold cyan]").strip()
+        if lens == "1":
+            ans = Prompt.ask("[bold cyan]What advice or perspective would you offer your friend?[/bold cyan]").strip()
+            if ans:
+                return f"Friend advice: {ans}"
+        elif lens == "2":
+            ans = Prompt.ask("[bold cyan]How did reality turn out in past similar instances?[/bold cyan]").strip()
+            if ans:
+                return f"Past experience: {ans}"
+        elif lens == "3":
+            ans = Prompt.ask("[bold cyan]What alternative explanations exist?[/bold cyan]").strip()
+            if ans:
+                return f"Alternative explanations: {ans}"
+        elif lens == "4":
+            ans = Prompt.ask("[bold cyan]How would you cope if the worst happened?[/bold cyan]").strip()
+            if ans:
+                return f"Coping capacity: {ans}"
+        elif lens:
+            return lens
+        else:
+            console.print("[red][!] Please enter contradictory evidence, or select 1-4.[/red]")
+            val = Prompt.ask("[bold]Evidence Against the Thought[/bold]").strip()
+            if val:
+                return val
+
+    return val
+
+def prompt_balanced_reframe(auto_thought: str, evidence_against: str, distortions: List[str]) -> str:
+    """Prompt for balanced reframe with structured template formula if requested."""
+    console.print("\n[bold cyan]STEP 6: RATIONAL & BALANCED ALTERNATIVE THOUGHT[/bold cyan]")
+    console.print("[dim]Synthesize the evidence into a balanced, realistic, compassionate perspective (type '?' for formula).[/dim]")
+    val = Prompt.ask("[bold]Balanced Alternative Thought[/bold]").strip()
+
+    while not val or val.lower() in ("?", "help", "hint"):
+        console.print("\n[bold yellow][*] Reframe Formulation Formula (Burns / Beck):[/bold yellow]")
+        console.print("  [cyan]Formula:[/cyan] [dim]\"Even though [trigger/fact], the reality is [contradictory evidence], so I can [constructive stance].\"[/dim]")
+        console.print("  [cyan]Example:[/cyan] [dim]\"Even though I made a mistake, one error does not define my ability, and I can fix it calmly.\"[/dim]\n")
+
+        suggested = f"Even though this situation is challenging, the facts show that {evidence_against[:60]}, and I can handle this step-by-step."
+        console.print(f"[dim]Suggested starter:[/dim] [green]\"{suggested}\"[/green]\n")
+
+        val = Prompt.ask("[bold]Balanced Alternative Thought[/bold]", default=suggested).strip()
+        if val:
+            return val
+
+    return val
 
 def execute_burns_technique(method_code: str, thought: str) -> Tuple[str, str, str, dict]:
     """Interactively walks the user through a specific David Burns technique.
@@ -294,6 +363,8 @@ def run_quick_checkin(db: Database) -> MoodEntry:
     energy = ask_int_in_range("Rate current energy level (1 = exhausted, 10 = fully energized)", 1, 10, default=5)
 
     situation = Prompt.ask("[bold cyan]Context / Brief note on what you are doing right now (optional)[/bold cyan]").strip()
+    raw_tags = Prompt.ask("[bold cyan]Tags (comma-separated, e.g. work, sleep, health) (optional)[/bold cyan]").strip()
+    tags = [t.strip().lstrip("#") for t in raw_tags.split(",") if t.strip()]
     notes = Prompt.ask("[bold cyan]Any additional thoughts / notes (optional)[/bold cyan]").strip()
 
     entry = MoodEntry(
@@ -303,6 +374,7 @@ def run_quick_checkin(db: Database) -> MoodEntry:
         emotion_intensity_initial=intensity,
         energy_level=energy,
         situation=situation or None,
+        tags=tags,
         notes=notes or None,
     )
 
@@ -338,6 +410,20 @@ def run_cbt_session(db: Database) -> MoodEntry:
 
     belief_initial = ask_int_in_range("How strongly do you believe this automatic thought right now? (0-100%)", 0, 100, default=80)
 
+    # Optional Downward Arrow prompt to uncover root core schema
+    core_schema = None
+    use_arrow = Prompt.ask("[bold cyan]Apply Downward Arrow technique to uncover root core belief? (y/N)[/bold cyan]", default="n").strip().lower()
+    if use_arrow == "y":
+        console.print("\n[bold cyan]=== DOWNWARD / VERTICAL ARROW TECHNIQUE ===[/bold cyan]")
+        console.print("[dim]Ask: 'If that thought were true, what would that mean to you or about you?'[/dim]")
+        step1 = Prompt.ask("[bold]If that were true, why would that be terrible or what would it mean to you?[/bold]").strip()
+        step2 = Prompt.ask("[bold]And if that were true, what is the worst part about that?[/bold]").strip()
+        step3 = Prompt.ask("[bold]What does this reveal about your core rule/belief about yourself?[/bold]").strip()
+        core_schema = step3 or step2 or step1
+        if core_schema:
+            console.print(f"\n[bold green][+] Core Schema Uncovered:[/bold green] \"{core_schema}\"")
+            console.print("[dim]You can test and dismantle this core assumption in the Burns Lab ('leahy challenge').[/dim]\n")
+
     # Step 4: Identify Distortions
     distortions = select_distortions()
 
@@ -366,6 +452,8 @@ def run_cbt_session(db: Database) -> MoodEntry:
         evidence_for, evidence_against, alt_thought_suggested, details_dict = execute_burns_technique(
             selected_method_code, auto_thought
         )
+        if core_schema:
+            details_dict["core_schema"] = core_schema
         import json
         technique_details = json.dumps(details_dict)
 
@@ -388,21 +476,26 @@ def run_cbt_session(db: Database) -> MoodEntry:
         console.print("[dim]Prompt A: What objective, verifiable facts support this thought?[/dim]")
         evidence_for = Prompt.ask("[bold]Evidence Supporting the Thought[/bold]").strip() or "None stated."
 
-        console.print("\n[dim]Prompt B: What objective facts contradict or weaken this thought? (What would you tell a friend? Are there alternative explanations?)[/dim]")
-        evidence_against = Prompt.ask("[bold]Evidence Against the Thought[/bold]").strip()
-        while not evidence_against:
-            console.print("[red][!] Please identify at least one piece of contradictory evidence or an alternative view.[/red]")
-            evidence_against = Prompt.ask("[bold]Evidence Against the Thought[/bold]").strip()
+        # Evidence validation: check if evidence_for starts with feeling or subjective opinion
+        subjective_cues = ("i don't think", "i feel", "i doubt", "i guess", "i believe", "it seems", "i'm not sure")
+        if any(evidence_for.lower().startswith(cue) for cue in subjective_cues):
+            console.print("\n[yellow][*] Clinical Fact-Check Hint:[/yellow] Evidence must be verifiable, objective facts (like a video camera recording).")
+            console.print(f"[dim]    \"{evidence_for}\" sounds like an interpretation or feeling, not a hard observable fact.[/dim]")
+            rephrase = Prompt.ask("[bold cyan]Would you like to refine it to an objective fact? (y/N)[/bold cyan]", default="n").strip().lower()
+            if rephrase == "y":
+                evidence_for = Prompt.ask("[bold]Refined Objective Fact[/bold]").strip() or evidence_for
 
-        # Step 6: Alternative / Balanced Reframe
-        console.print("\n[bold cyan]STEP 6: RATIONAL & BALANCED ALTERNATIVE THOUGHT[/bold cyan]")
-        console.print("[dim]Synthesize the evidence into a balanced, realistic, compassionate perspective.[/dim]")
-        alt_thought = Prompt.ask("[bold]Balanced Alternative Thought[/bold]").strip()
-        while not alt_thought:
-            console.print("[red][!] Please formulate a balanced alternative thought.[/red]")
-            alt_thought = Prompt.ask("[bold]Balanced Alternative Thought[/bold]").strip()
+        evidence_against = prompt_evidence_against(auto_thought, distortions, db=db)
+        alt_thought = prompt_balanced_reframe(auto_thought, evidence_against, distortions)
+
 
     belief_final = ask_int_in_range("How much do you believe this new, balanced thought? (0-100%)", 0, 100, default=75)
+
+    # Burns Thought Quality Check
+    q_report = evaluate_rational_response(auto_thought, alt_thought, belief_final, belief_initial, distortions)
+    console.print(f"\n[dim]Burns Thought Quality Audit: [bold]{q_report.rating}[/bold] ({q_report.overall_score}/100)[/dim]")
+    for rec in q_report.recommendations:
+        console.print(f"  [!] {rec}")
 
     # Step 7: Outcome & Mood Re-rating
     console.print("\n[bold cyan]STEP 7: OUTCOME & RE-RATING[/bold cyan]")
@@ -410,10 +503,18 @@ def run_cbt_session(db: Database) -> MoodEntry:
     final_mood = ask_int_in_range("Re-rate overall mood (1-10)", 1, 10, default=min(10, initial_mood + 2))
     final_intensity = ask_int_in_range(f"Re-rate intensity of '{primary_emotion}' (0-100%)", 0, 100, default=max(0, initial_intensity - 30))
 
-    # Step 8: Behavioral Activation / Micro-Action
-    console.print("\n[bold cyan]STEP 8: CONSTRUCTIVE ACTION (OPTIONAL)[/bold cyan]")
+    # Step 8: Behavioral Activation / Micro-Action & Tags
+    console.print("\n[bold cyan]STEP 8: CONSTRUCTIVE ACTION & TAGS (OPTIONAL)[/bold cyan]")
     console.print("[dim]What is one small, concrete step you can take right now to help yourself or address the situation?[/dim]")
     action_plan = Prompt.ask("[bold]Small Constructive Action Step (optional)[/bold]").strip()
+    raw_tags = Prompt.ask("[bold]Tags (comma-separated, e.g. work, deadline, sleep) (optional)[/bold]").strip()
+    tags = [t.strip().lstrip("#") for t in raw_tags.split(",") if t.strip()]
+
+    # Step 9: Acceptance & Cognitive Defusion (ACT)
+    console.print("\n[bold cyan]STEP 9: COGNITIVE DEFUSION (ACT MINDFULNESS)[/bold cyan]")
+    console.print(f"  Fused with thought:  [dim]\"{auto_thought}\"[/dim]")
+    console.print(f"  Defused observation: [bold green]\"I notice that I am having the thought that: '{auto_thought}'.\"[/bold green]")
+    console.print("  [dim]Thoughts are cognitive events passing through awareness, not objective commands or reality.[/dim]\n")
 
     entry = MoodEntry(
         entry_type="cbt_record",
@@ -434,6 +535,8 @@ def run_cbt_session(db: Database) -> MoodEntry:
         action_plan=action_plan or None,
         technique_used=technique_used,
         technique_details=technique_details,
+        tags=tags,
+        notes=f"Core Schema: {core_schema}" if core_schema else None,
     )
 
     entry_id = db.save_entry(entry)
@@ -546,3 +649,578 @@ def run_belief_challenge_session(db: Database) -> MoodEntry:
 
     console.print(Panel(summary_text, title="[bold]Burns Belief Test Results[/bold]", box=box.ROUNDED, border_style="green"))
     return entry
+
+def run_3column_technique(db: Database, initial_thought: Optional[str] = None) -> MoodEntry:
+    """David Burns' Triple-Column Technique for rapid cognitive restructuring."""
+    print_header("Burns 3-Column Thought Buster", subtitle="Automatic Thought | Cognitive Distortions | Rational Response")
+
+    if initial_thought:
+        nat = initial_thought.strip()
+        console.print(f"[bold cyan]Automatic Negative Thought:[/bold cyan] {nat}")
+    else:
+        nat = Prompt.ask("[bold cyan]Automatic Negative Thought (NAT)[/bold cyan]").strip()
+        while not nat:
+            nat = Prompt.ask("[bold cyan]Please enter your automatic thought[/bold cyan]").strip()
+
+    belief_initial = ask_int_in_range("How strongly do you believe this thought right now? (0-100%)", 0, 100, default=80)
+    primary_emotion, initial_intensity = select_emotion()
+    initial_mood = ask_int_in_range("Overall mood right now (1 = distress, 10 = great)", 1, 10, default=4)
+
+    # Column 2: Cognitive Distortions
+    distortions = select_distortions()
+
+    # Column 3: Rational Response
+    console.print("\n[bold cyan]COLUMN 3: RATIONAL RESPONSE (REFRAME)[/bold cyan]")
+    console.print("[dim]Write an objective, compassionate statement that directly refutes the distortions in Column 2.[/dim]")
+    rational_response = Prompt.ask("[bold]Rational Response[/bold]").strip()
+    while not rational_response:
+        rational_response = Prompt.ask("[bold]Rational Response[/bold]").strip()
+
+    belief_final = ask_int_in_range("How strongly do you believe this rational response? (0-100%)", 0, 100, default=80)
+
+    # Quality Check
+    q_report = evaluate_rational_response(nat, rational_response, belief_final, belief_initial, distortions)
+    console.print(f"\n[dim]Rational Response Audit: [bold]{q_report.rating}[/bold] ({q_report.overall_score}/100)[/dim]")
+    for r in q_report.recommendations:
+        console.print(f"  [!] {r}")
+
+    # Re-rate
+    belief_after = ask_int_in_range(f"Re-rate belief in the negative thought (0-100%)", 0, 100, default=max(0, belief_initial - 40))
+    final_mood = ask_int_in_range("Re-rate overall mood (1-10)", 1, 10, default=min(10, initial_mood + 2))
+    final_intensity = ask_int_in_range(f"Re-rate intensity of '{primary_emotion}' (0-100%)", 0, 100, default=max(0, initial_intensity - 30))
+
+    entry = MoodEntry(
+        entry_type="cbt_record",
+        initial_mood=initial_mood,
+        primary_emotion=primary_emotion,
+        emotion_intensity_initial=initial_intensity,
+        automatic_thought=nat,
+        belief_initial=belief_initial,
+        distortions=distortions,
+        alternative_thought=rational_response,
+        belief_final=belief_final,
+        final_mood=final_mood,
+        emotion_intensity_final=final_intensity,
+        technique_used="triple_column",
+        notes="3-Column Thought Buster",
+    )
+    entry_id = db.save_entry(entry)
+
+    # Print 3-column table
+    from rich.table import Table
+    table = Table(title=f"3-Column Record #{entry_id}", box=box.ROUNDED, header_style="bold cyan")
+    table.add_column("1. Automatic Thought (NAT)", style="red", width=28)
+    table.add_column("2. Cognitive Distortions", style="magenta", width=26)
+    table.add_column("3. Rational Response", style="green", width=34)
+
+    dist_names = [COGNITIVE_DISTORTIONS[d].name for d in distortions if d in COGNITIVE_DISTORTIONS]
+    dist_str = "\n".join(f"[*] {name}" for name in dist_names) if dist_names else "None identified"
+
+    table.add_row(
+        f"\"{nat}\"\n(Belief: {belief_initial}% -> {belief_after}%)",
+        dist_str,
+        f"\"{rational_response}\"\n(Belief: {belief_final}%)",
+    )
+    console.print()
+    console.print(table)
+    console.print(f"[green][+] Saved successfully! Mood: {initial_mood}/10 -> {final_mood}/10 ({format_delta_badge(final_mood - initial_mood)})[/green]\n")
+    return entry
+
+def run_das_assessment(db: Database) -> DASAssessment:
+    """Burns' Dysfunctional Attitude Scale (DAS) questionnaire."""
+    print_header("Burns' Dysfunctional Attitude Scale (DAS)", subtitle="Identify deep-seated silent assumptions and psychological vulnerabilities")
+
+    console.print("[dim]Rate each statement from 1 (Strongly Disagree) to 7 (Strongly Agree).[/dim]")
+    console.print("[dim]1 = Strongly Disagree | 4 = Neutral / Unsure | 7 = Strongly Agree[/dim]\n")
+
+    scores_by_domain: Dict[str, List[int]] = {}
+    answers = {}
+
+    for q in DAS_QUESTIONS:
+        console.print(f"[bold cyan]Item {q.id}/10:[/bold cyan] \"{q.text}\"")
+        score = ask_int_in_range("Your rating (1-7)", 1, 7, default=4)
+        answers[str(q.id)] = score
+        if q.domain not in scores_by_domain:
+            scores_by_domain[q.domain] = []
+        scores_by_domain[q.domain].append(score)
+        console.print()
+
+    total_score = sum(answers.values())
+
+    # Calculate average per domain
+    domain_averages = []
+    for dom, score_list in scores_by_domain.items():
+        avg = sum(score_list) / len(score_list)
+        domain_averages.append((dom, avg))
+
+    domain_averages.sort(key=lambda x: x[1], reverse=True)
+    top_vulns = [d[0] for d in domain_averages if d[1] >= 4.5]
+    if not top_vulns and domain_averages:
+        top_vulns = [domain_averages[0][0]]
+
+    import json
+    assessment = DASAssessment(
+        scores_json=json.dumps(answers),
+        total_score=total_score,
+        top_vulnerabilities=", ".join(top_vulns),
+        notes=f"Top: {', '.join(top_vulns)}",
+    )
+    db.save_das(assessment)
+
+    # Display Results
+    from rich.table import Table
+    table = Table(title="DAS Psychological Vulnerability Profile", box=box.ROUNDED, header_style="bold magenta")
+    table.add_column("Vulnerability Domain", width=34)
+    table.add_column("Avg Score (1-7)", justify="center", width=16)
+    table.add_column("Vulnerability Level", justify="center", width=22)
+
+    for dom, avg in domain_averages:
+        if avg >= 5.5:
+            level_str = "[bold red]HIGH VULNERABILITY[/bold red]"
+        elif avg >= 4.0:
+            level_str = "[bold yellow]MODERATE RISK[/bold yellow]"
+        else:
+            level_str = "[bold green]HEALTHY / RESILIENT[/bold green]"
+        table.add_row(dom, f"{avg:.1f}/7", level_str)
+
+    console.print(table)
+
+    # Print Antidotes for top vulnerabilities
+    console.print("\n[bold cyan]=== DAVID BURNS' CLINICAL ANTIDOTES FOR YOUR PROFILE ===[/bold cyan]")
+    for v in top_vulns[:2]:
+        antidote = DOMAIN_ANTIDOTES.get(v, "Challenge rigid assumptions with Socratic questioning.")
+        console.print(Panel(antidote, title=f"[bold]{v}[/bold]", box=box.ROUNDED, border_style="yellow"))
+
+    return assessment
+
+def run_anti_procrastination_predict(
+    db: Database,
+    task_name: Optional[str] = None,
+    predicted_pleasure: Optional[int] = None,
+    predicted_difficulty: Optional[int] = None,
+    notes: Optional[str] = None,
+) -> AntiProcrastinationTask:
+    """Add task to Burns Anti-Procrastination & Pleasure-Predicting Sheet."""
+    if not task_name:
+        print_header("Burns Anti-Procrastination Sheet", subtitle="Step 1: Predict task difficulty and pleasure before starting")
+        task_name = Prompt.ask("[bold cyan]Task Name / Activity to Tackle[/bold cyan]").strip()
+        while not task_name:
+            task_name = Prompt.ask("[bold cyan]Please enter a task name[/bold cyan]").strip()
+
+    if predicted_difficulty is None:
+        console.print("\n[dim]Before starting, people with anxiety or depression grossly overestimate difficulty and underestimate pleasure.[/dim]")
+        pred_diff = ask_int_in_range("Predict difficulty (0% = effortless, 100% = excruciatingly hard)", 0, 100, default=70)
+    else:
+        pred_diff = max(0, min(100, predicted_difficulty))
+
+    if predicted_pleasure is None:
+        pred_pleas = ask_int_in_range("Predict satisfaction / pleasure (0% = zero joy, 100% = deeply rewarding)", 0, 100, default=20)
+    else:
+        pred_pleas = max(0, min(100, predicted_pleasure))
+
+    if notes is None and not (task_name and predicted_pleasure is not None):
+        notes_input = Prompt.ask("\n[bold cyan]Notes / Subtasks to do first (optional)[/bold cyan]").strip()
+        notes = notes_input or None
+
+    task = AntiProcrastinationTask(
+        task_name=task_name,
+        predicted_difficulty=pred_diff,
+        predicted_pleasure=pred_pleas,
+        status="pending",
+        notes=notes or None,
+    )
+    task_id = db.save_task(task)
+    task.id = task_id
+
+    console.print(f"\n[bold green][+] Activity #{task_id} logged to Pleasure Prediction Sheet![/bold green]")
+    console.print(f"    Activity: \"{task_name}\"")
+    console.print(f"    Predicted: Pleasure {pred_pleas}% | Difficulty {pred_diff}%")
+    console.print(f"[dim]After doing even 10 minutes of this activity, run 'leahy complete {task_id}' to record actual pleasure vs prediction.[/dim]\n")
+    return task
+
+def run_anti_procrastination_complete(
+    db: Database,
+    task_id: Optional[int] = None,
+    actual_pleasure: Optional[int] = None,
+    actual_difficulty: Optional[int] = None,
+    notes: Optional[str] = None,
+):
+    """Complete a task on the Anti-Procrastination Sheet and record reality vs expectation."""
+    if task_id is None:
+        print_header("Burns Anti-Procrastination Sheet", subtitle="Step 2: Record actual difficulty and pleasure to bust cognitive distortions")
+        pending_tasks = db.list_tasks(status="pending")
+        if not pending_tasks:
+            console.print("[yellow][*] No pending activities found. Log one first with 'leahy predict'.[/yellow]")
+            return
+        console.print("[bold]Select pending activity to complete:[/bold]")
+        for t in pending_tasks:
+            console.print(f"  [{t.id}] {t.task_name} (Predicted: Pleas {t.predicted_pleasure}%, Diff {t.predicted_difficulty}%)")
+        task_id = ask_int_in_range("Activity ID", min(t.id for t in pending_tasks), max(t.id for t in pending_tasks))
+
+    task = db.get_task(task_id)
+    if not task:
+        console.print(f"[red][!] Activity #{task_id} not found.[/red]")
+        return
+
+    console.print(f"\n[bold cyan]Completing Activity #{task.id}:[/bold cyan] \"{task.task_name}\"")
+    console.print(f"[dim]Originally predicted: Pleasure {task.predicted_pleasure}%, Difficulty {task.predicted_difficulty}%[/dim]")
+
+    if actual_pleasure is None:
+        act_pleas = ask_int_in_range("Actual satisfaction / pleasure experienced (0-100%)", 0, 100, default=70)
+    else:
+        act_pleas = max(0, min(100, actual_pleasure))
+
+    if actual_difficulty is None:
+        act_diff = ask_int_in_range("Actual difficulty in reality (0-100%)", 0, 100, default=30)
+    else:
+        act_diff = max(0, min(100, actual_difficulty))
+
+    if notes is None and (actual_pleasure is None or actual_difficulty is None):
+        refl_input = Prompt.ask("[bold cyan]Reflection / What did you learn? (optional)[/bold cyan]").strip()
+        notes = refl_input or None
+
+    task.actual_difficulty = act_diff
+    task.actual_pleasure = act_pleas
+    task.status = "completed"
+    task.completed_at = datetime.now().isoformat()
+    if notes:
+        task.notes = f"{task.notes or ''} | {notes}".strip(" | ")
+
+    db.update_task(task)
+
+    diff_delta = task.difficulty_delta
+    pleas_delta = task.pleasure_delta
+
+    diff_str = f"Easier by [bold green]{diff_delta}%[/bold green]" if (diff_delta and diff_delta > 0) else f"{diff_delta}%"
+    pleas_str = f"More satisfying by [bold green]+{pleas_delta}%[/bold green]" if (pleas_delta and pleas_delta > 0) else f"{pleas_delta}%"
+
+    console.print(f"\n[bold green][+] Activity #{task.id} marked completed![/bold green]\n")
+    res_text = Text()
+    res_text.append("Reality vs Prediction Analysis:\n", style="bold cyan")
+    res_text.append(f"  Pleasure / Satisfaction: Predicted {task.predicted_pleasure}% -> Actual {act_pleas}% ({pleas_str})\n")
+    res_text.append(f"  Difficulty / Effort:      Predicted {task.predicted_difficulty}% -> Actual {act_diff}% ({diff_str})\n")
+    res_text.append("\nBurns Clinical Insight: Procrastination is fueled by the illusion that tasks will be excruciating and unrewarding. Reality almost always delivers far more pleasure than your anxious mind predicts.\n", style="dim")
+
+    console.print(Panel(res_text, title="[bold]Anti-Procrastination & Pleasure Victory[/bold]", box=box.ROUNDED, border_style="green"))
+
+
+def run_behavioral_experiment_new(
+    db: Database,
+    title: Optional[str] = None,
+    fear_prediction: Optional[str] = None,
+    predicted_belief: Optional[int] = None,
+    experiment_plan: Optional[str] = None,
+) -> BehavioralExperiment:
+    """Set up an empirical behavioral experiment to test a catastrophic fear."""
+    if not title:
+        print_header("Behavioral Experiment Lab", subtitle="Step 1: Formulate feared hypothesis and empirical test")
+        title = Prompt.ask("[bold cyan]Experiment Title / Challenge[/bold cyan]").strip()
+        while not title:
+            title = Prompt.ask("[bold cyan]Please enter a title[/bold cyan]").strip()
+
+    if not fear_prediction:
+        console.print("\n[dim]State exactly what catastrophic consequence your anxiety predicts will happen:[/dim]")
+        fear_prediction = Prompt.ask("[bold cyan]What exactly do you fear will happen? (Feared Catastrophe)[/bold cyan]").strip()
+        while not fear_prediction:
+            fear_prediction = Prompt.ask("[bold cyan]Please describe the feared outcome[/bold cyan]").strip()
+
+    if predicted_belief is None:
+        predicted_belief = ask_int_in_range("How strongly do you believe this catastrophe will occur? (0-100%)", 0, 100, default=80)
+
+    if not experiment_plan:
+        console.print("\n[dim]Describe a concrete, observable action you will take to empirically test this fear:[/dim]")
+        experiment_plan = Prompt.ask("[bold cyan]Experiment Action Plan (What will you do?)[/bold cyan]").strip()
+        while not experiment_plan:
+            experiment_plan = Prompt.ask("[bold cyan]Please enter your action plan[/bold cyan]").strip()
+
+    exp = BehavioralExperiment(
+        title=title,
+        fear_prediction=fear_prediction,
+        predicted_belief=predicted_belief,
+        experiment_plan=experiment_plan,
+        status="pending",
+    )
+
+    exp_id = db.save_experiment(exp)
+    exp.id = exp_id
+
+    console.print(f"\n[bold green][+] Behavioral Experiment #{exp_id} created![/bold green]")
+    console.print(f"    Challenge: \"{title}\"")
+    console.print(f"    Feared Prediction: \"{fear_prediction}\" (Belief: {predicted_belief}%)")
+    console.print(f"    Action: \"{experiment_plan}\"")
+    console.print(f"[dim]Perform this real-world test, then run 'leahy experiment complete {exp_id}' to record the outcome.[/dim]\n")
+    return exp
+
+
+def run_behavioral_experiment_complete(
+    db: Database,
+    exp_id: Optional[int] = None,
+    experiment_id: Optional[int] = None,
+    actual_outcome: Optional[str] = None,
+    actual_severity: Optional[int] = None,
+    fear_realized: Optional[bool] = None,
+    conclusion: Optional[str] = None,
+) -> Optional[BehavioralExperiment]:
+    """Record reality and empirical conclusion for a behavioral experiment."""
+    exp_id = exp_id or experiment_id
+    if exp_id is None:
+        print_header("Behavioral Experiment Lab", subtitle="Step 2: Compare empirical reality against catastrophic fear")
+        pending_exps = db.list_experiments(status="pending")
+        if not pending_exps:
+            console.print("[yellow][*] No pending behavioral experiments found. Design one with 'leahy experiment new'.[/yellow]\n")
+            return None
+        console.print("[bold]Select pending experiment to evaluate:[/bold]")
+        for e in pending_exps:
+            console.print(f"  [{e.id}] {e.title} (Fear: \"{e.fear_prediction}\", Belief: {e.predicted_belief}%)")
+        exp_id = ask_int_in_range("Experiment ID", min(e.id for e in pending_exps), max(e.id for e in pending_exps))
+
+    exp = db.get_experiment(exp_id)
+    if not exp:
+        console.print(f"[red][!] Experiment #{exp_id} not found.[/red]")
+        return None
+
+    console.print(f"\n[bold cyan]Evaluating Experiment #{exp.id}:[/bold cyan] \"{exp.title}\"")
+    console.print(f"  Feared prediction was: [dim]\"{exp.fear_prediction}\" (Belief: {exp.predicted_belief}%)[/dim]")
+    console.print(f"  Planned action was:   [dim]\"{exp.experiment_plan}\"[/dim]\n")
+
+    if not actual_outcome:
+        actual_outcome = Prompt.ask("[bold cyan]What actually happened when you did the experiment?[/bold cyan]").strip()
+        while not actual_outcome:
+            actual_outcome = Prompt.ask("[bold cyan]Please describe what actually happened[/bold cyan]").strip()
+
+    if actual_severity is None:
+        actual_severity = ask_int_in_range("In reality, how bad was the outcome? (0% = completely fine/positive, 100% = total disaster)", 0, 100, default=20)
+
+    if fear_realized is None:
+        realized_ans = Prompt.ask("[bold cyan]Did the feared catastrophe actually materialize? (y/N)[/bold cyan]", default="n").strip().lower()
+        fear_realized = (realized_ans == "y")
+
+    if not conclusion:
+        console.print("\n[dim]What does this experiment prove about your anxiety and catastrophic predictions?[/dim]")
+        conclusion = Prompt.ask("[bold cyan]Conclusion / Key Takeaway[/bold cyan]").strip()
+        if not conclusion:
+            conclusion = "Reality was far more manageable than my catastrophic prediction."
+
+    exp.actual_outcome = actual_outcome
+    exp.actual_severity = actual_severity
+    exp.fear_realized = fear_realized
+    exp.conclusion = conclusion
+    exp.status = "completed"
+    exp.completed_at = datetime.now().isoformat()
+
+    db.update_experiment(exp)
+
+    err = exp.prediction_error
+    gap_str = f"Reality was [bold green]+{err}% better[/bold green] than feared!" if (err and err > 0) else f"{err}%"
+
+    console.print(f"\n[bold green][+] Behavioral Experiment #{exp.id} marked completed![/bold green]\n")
+
+    res_text = Text()
+    res_text.append("Empirical Reality vs Catastrophic Dread:\n", style="bold cyan")
+    res_text.append(f"  Feared Prediction:  \"{exp.fear_prediction}\" (Belief: {exp.predicted_belief}%)\n")
+    res_text.append(f"  Actual Outcome:     \"{actual_outcome}\" (Severity: {actual_severity}%)\n")
+    res_text.append(f"  Fear Disproven?     {'YES (Catastrophe averted)' if not fear_realized else 'Catastrophe occurred'}\n", style="bold green" if not fear_realized else "bold yellow")
+    res_text.append(f"  Prediction Error:   {gap_str}\n\n")
+    res_text.append(f"Empirical Conclusion:\n  \"{conclusion}\"\n", style="bold green")
+
+    console.print(Panel(res_text, title="[bold]Cognitive Reality Check[/bold]", box=box.ROUNDED, border_style="green"))
+    return exp
+
+
+def run_exposure_ladder_new(
+    db: Database,
+    fear_theme: Optional[str] = None,
+    theme: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> ExposureLadder:
+    """Create a new Exposure Hierarchy / Ladder of Fear."""
+    print_header("Exposure Hierarchy Builder", subtitle="Create step-by-step ladder of fear with SUDS ratings (0-100)")
+
+    fear_theme = theme or fear_theme
+    if not fear_theme:
+        fear_theme = Prompt.ask("[bold cyan]Theme of Fear (e.g. Social Rejection, Public Speaking, Heights)[/bold cyan]").strip()
+        while not fear_theme:
+            fear_theme = Prompt.ask("[bold cyan]Please specify the fear theme[/bold cyan]").strip()
+
+    ladder = ExposureLadder(fear_theme=fear_theme, notes=notes)
+    ladder_id = db.save_ladder(ladder)
+    ladder.id = ladder_id
+
+    console.print(f"\n[bold green][+] Fear Hierarchy #{ladder_id} created:[/bold green] \"{fear_theme}\"")
+    console.print("[dim]Now add hierarchical steps graded by SUDS (Subjective Units of Distress: 0 = relaxed, 100 = extreme panic).[/dim]\n")
+
+    step_order = 1
+    while True:
+        try:
+            desc = Prompt.ask(f"[bold cyan]Step #{step_order} Challenge description (or press Enter to finish ladder)[/bold cyan]", default="").strip()
+            if not desc:
+                break
+            suds = ask_int_in_range(f"Rate distress/difficulty for '{desc}' (SUDS 0-100)", 0, 100, default=25 * min(4, step_order))
+            step = ExposureStep(
+                ladder_id=ladder_id,
+                step_order=step_order,
+                description=desc,
+                target_suds=suds,
+                status="pending",
+            )
+            db.save_exposure_step(step)
+            ladder.steps.append(step)
+            step_order += 1
+            console.print(f"  [+] Added Step #{step_order - 1}: \"{desc}\" [SUDS: {suds}/100]\n")
+        except (EOFError, KeyboardInterrupt):
+            break
+
+    console.print(f"\n[bold green][+] Ladder #{ladder_id} finalized with {len(ladder.steps)} steps.[/bold green]")
+    console.print(f"[dim]Inspect with 'leahy ladder show {ladder_id}' and practice with 'leahy ladder practice <step_id>'.[/dim]\n")
+    return ladder
+
+
+def run_exposure_practice(
+    db: Database,
+    step_id: Optional[int] = None,
+    pre_suds: Optional[int] = None,
+    post_suds: Optional[int] = None,
+    notes: Optional[str] = None,
+    mastered: Optional[bool] = None,
+):
+    """Run an exposure trial to practice desensitization and record habituation."""
+    print_header("Exposure Trial Practice", subtitle="Face feared situation and observe natural anxiety habituation")
+
+    if step_id is None:
+        ladders = db.list_ladders()
+        if not ladders:
+            console.print("[yellow][*] No exposure ladders found. Create one with 'leahy ladder new'.[/yellow]\n")
+            return
+        all_steps = []
+        for lad in ladders:
+            for s in lad.steps:
+                if s.status != "mastered":
+                    all_steps.append((lad.fear_theme, s))
+
+        if not all_steps:
+            console.print("[bold green][+] Incredible! All steps across your ladders are mastered![/bold green]\n")
+            return
+
+        console.print("[bold]Select an exposure step to practice:[/bold]")
+        for theme, s in all_steps:
+            console.print(f"  [{s.id}] [{theme}] {s.description} (Target SUDS: {s.target_suds}, Reps: {s.repetitions_done})")
+        step_id = ask_int_in_range("Step ID", min(s.id for _, s in all_steps), max(s.id for _, s in all_steps))
+
+    step = db.get_exposure_step(step_id)
+    if not step:
+        console.print(f"[red][!] Step #{step_id} not found.[/red]")
+        return
+
+    console.print(f"\n[bold cyan]Practicing Exposure Step #{step.id}:[/bold cyan] \"{step.description}\"")
+    console.print(f"[dim]Target SUDS: {step.target_suds}/100 | Repetitions completed so far: {step.repetitions_done}[/dim]\n")
+
+    if pre_suds is None:
+        pre_suds = ask_int_in_range("Rate current distress / anxiety BEFORE starting (SUDS 0-100)", 0, 100, default=step.target_suds)
+
+    if post_suds is None:
+        console.print("\n[bold yellow][*] EXPOSURE IN PROGRESS [*][/bold yellow]")
+        console.print("[dim]Stay in the situation. Do not use safety behaviors. Let the anxiety peak and subside naturally (habituation).[/dim]")
+        Prompt.ask("[bold cyan]Press Enter once you have completed the exposure trial...[/bold cyan]")
+        post_suds = ask_int_in_range("Rate anxiety / distress AFTER staying in the situation (SUDS 0-100)", 0, 100, default=max(0, pre_suds - 30))
+
+    if notes is None and not mastered:
+        refl = Prompt.ask("[bold cyan]What did you learn? (optional)[/bold cyan]", default="").strip()
+        if refl:
+            notes = refl
+
+    step.repetitions_done += 1
+    step.last_pre_suds = pre_suds
+    step.last_post_suds = post_suds
+    step.status = "in_progress"
+
+    if notes:
+        step.notes = f"{step.notes or ''} | Rep {step.repetitions_done}: {notes}".strip(" | ")
+
+    if mastered:
+        step.status = "mastered"
+        step.completed_at = datetime.now().isoformat()
+    elif post_suds <= 25 and step.repetitions_done >= 2:
+        mark_mastered = Prompt.ask("[bold green]Anxiety has dropped below 25 across multiple reps. Mark step as MASTERED? (Y/n)[/bold green]", default="y").strip().lower()
+        if mark_mastered != "n":
+            step.status = "mastered"
+            step.completed_at = datetime.now().isoformat()
+
+    db.update_exposure_step(step)
+
+    hab_delta = pre_suds - post_suds
+    relief_str = f"Reduced by [bold green]-{hab_delta} SUDS points[/bold green]" if hab_delta > 0 else f"{hab_delta}"
+
+    console.print(f"\n[bold green][+] Exposure Trial #{step.repetitions_done} recorded![/bold green]")
+    console.print(f"    Pre-Exposure Distress:  {pre_suds}/100")
+    console.print(f"    Post-Exposure Distress: {post_suds}/100 ({relief_str})")
+    if step.status == "mastered":
+        console.print("[bold green][*] STEP MASTERED! You have desensitized this level of fear.[/bold green]\n")
+    else:
+        console.print("[dim]Repeat this step a few more times until anxiety remains consistently under 25 SUDS.[/dim]\n")
+
+
+def run_decatastrophize_session(db: Database, situation: Optional[str] = None):
+    """Run a structured David Burns Decatastrophizing mini-session (Worst / Likely / Coping Protocol)."""
+    print_header("Decatastrophizing Protocol", subtitle="Method: 'What-If' worst case, best case, most likely, and coping plan")
+
+    if not situation:
+        situation = Prompt.ask("[bold cyan]What situation or threat is triggering anxiety?[/bold cyan]").strip()
+        while not situation:
+            situation = Prompt.ask("[bold cyan]Please enter the situation[/bold cyan]").strip()
+
+    initial_fear = ask_int_in_range("Rate current anxiety / dread intensity (0-100%)", 0, 100, default=80)
+
+    console.print("\n[bold cyan]STEP 1: THE WORST-CASE SCENARIO[/bold cyan]")
+    console.print("[dim]Face the dragon directly: If your worst nightmare occurred, what is the absolute worst that could happen?[/dim]")
+    worst_case = Prompt.ask("[bold]Worst-case scenario[/bold]").strip()
+
+    console.print("\n[bold cyan]STEP 2: THE BEST-CASE SCENARIO[/bold cyan]")
+    console.print("[dim]Now consider the opposite extreme: What would the best possible outcome look like?[/dim]")
+    best_case = Prompt.ask("[bold]Best-case scenario[/bold]").strip()
+
+    console.print("\n[bold cyan]STEP 3: THE MOST LIKELY REALISTIC SCENARIO[/bold cyan]")
+    console.print("[dim]Based on facts, logic, and past history, what is the most probable outcome in reality?[/dim]")
+    likely_case = Prompt.ask("[bold]Most likely outcome[/bold]").strip()
+
+    console.print("\n[bold cyan]STEP 4: ACTIONABLE COPING PROTOCOL[/bold cyan]")
+    console.print("[dim]Even in the unlikely event the worst happened, what concrete steps would you take to cope and survive?[/dim]")
+    coping_plan = Prompt.ask("[bold]How I would cope and handle it[/bold]").strip()
+
+    final_fear = ask_int_in_range("Re-rate anxiety intensity after looking at reality & coping (0-100%)", 0, 100, default=max(0, initial_fear - 35))
+
+    details = {
+        "worst_case": worst_case,
+        "best_case": best_case,
+        "likely_case": likely_case,
+        "coping_plan": coping_plan,
+    }
+    import json
+
+    reframe_thought = f"The most likely outcome is: '{likely_case}'. Even if the worst happened ('{worst_case}'), I have a coping protocol: '{coping_plan}'."
+
+    entry = MoodEntry(
+        entry_type="cbt_record",
+        initial_mood=max(1, 10 - round(initial_fear / 10)),
+        primary_emotion="Anxious",
+        emotion_intensity_initial=initial_fear,
+        situation=situation,
+        automatic_thought=f"Worst case: {worst_case}",
+        distortions=["catastrophizing", "jumping_fortune_telling"],
+        evidence_against=f"Most likely realistic outcome: {likely_case}",
+        alternative_thought=reframe_thought,
+        belief_final=80,
+        final_mood=min(10, 10 - round(final_fear / 10)),
+        emotion_intensity_final=final_fear,
+        action_plan=coping_plan,
+        technique_used="what_if_decatastrophize",
+        technique_details=json.dumps(details),
+        notes=f"Decatastrophizing: Best case: {best_case}",
+    )
+    entry_id = db.save_entry(entry)
+
+    relief = initial_fear - final_fear
+    console.print(f"\n[bold green][+] Decatastrophizing session saved as CBT record #{entry_id}![/bold green]")
+    console.print(f"    Anxiety Relief: {initial_fear}% -> {final_fear}% (Relief: -{relief}%)")
+    console.print(f"    Empowering Reframe: \"{reframe_thought}\"\n")
+
+
