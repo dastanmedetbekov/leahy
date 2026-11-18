@@ -198,7 +198,7 @@ class LeaheApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/tasks":
-            tasks = self.db.list_procrastination_tasks()
+            tasks = self.db.list_tasks()
             self._send_json([
                 {
                     "id": t.id,
@@ -219,10 +219,10 @@ class LeaheApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/ladders":
-            ladders = self.db.list_exposure_ladders()
+            ladders = self.db.list_ladders()
             res = []
             for l in ladders:
-                steps = self.db.get_exposure_steps(l.id)
+                steps = self.db.list_exposure_steps(ladder_id=l.id)
                 res.append({
                     "id": l.id,
                     "created_at": l.created_at,
@@ -314,13 +314,16 @@ class LeaheApiHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/experiments/") and path.endswith("/complete"):
             try:
                 exp_id = int(path.split("/")[3])
-                self.db.complete_experiment(
+                updated = self.db.complete_experiment(
                     experiment_id=exp_id,
                     actual_outcome=payload.get("actual_outcome", ""),
                     actual_severity=int(payload.get("actual_severity", 0)),
                     fear_realized=bool(payload.get("fear_realized", False)),
                     conclusion=payload.get("conclusion", ""),
                 )
+                if not updated:
+                    self._send_error("Experiment not found", status=404)
+                    return
                 self._send_json({"status": "completed", "id": exp_id})
             except Exception as e:
                 self._send_error(f"Error completing experiment: {str(e)}", status=400)
@@ -334,7 +337,7 @@ class LeaheApiHandler(BaseHTTPRequestHandler):
                     predicted_pleasure=int(payload.get("predicted_pleasure", 50)),
                     notes=payload.get("notes"),
                 )
-                task_id = self.db.save_procrastination_task(task)
+                task_id = self.db.save_task(task)
                 self._send_json({"id": task_id, "status": "created"}, status=201)
             except Exception as e:
                 self._send_error(f"Error saving task: {str(e)}", status=400)
@@ -343,12 +346,15 @@ class LeaheApiHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/tasks/") and path.endswith("/complete"):
             try:
                 task_id = int(path.split("/")[3])
-                self.db.complete_procrastination_task(
+                updated = self.db.complete_task(
                     task_id=task_id,
                     actual_difficulty=int(payload.get("actual_difficulty", 50)),
                     actual_pleasure=int(payload.get("actual_pleasure", 50)),
                     notes=payload.get("notes"),
                 )
+                if not updated:
+                    self._send_error("Task not found", status=404)
+                    return
                 self._send_json({"status": "completed", "id": task_id})
             except Exception as e:
                 self._send_error(f"Error completing task: {str(e)}", status=400)

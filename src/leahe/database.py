@@ -525,6 +525,30 @@ class Database:
             rows = cursor.fetchall()
             return [AntiProcrastinationTask.from_row(dict(r)) for r in rows]
 
+    def complete_task(
+        self,
+        task_id: int,
+        actual_difficulty: int = 50,
+        actual_pleasure: int = 50,
+        notes: Optional[str] = None,
+    ) -> Optional[AntiProcrastinationTask]:
+        task = self.get_task(task_id)
+        if not task:
+            return None
+        task.actual_difficulty = actual_difficulty
+        task.actual_pleasure = actual_pleasure
+        task.status = "completed"
+        task.completed_at = datetime.now().isoformat()
+        if notes:
+            task.notes = f"{task.notes or ''} | {notes}".strip(" | ")
+        self.update_task(task)
+        return task
+
+    # Aliases for task management
+    list_procrastination_tasks = list_tasks
+    save_procrastination_task = save_task
+    complete_procrastination_task = complete_task
+
     # --- DAS (Dysfunctional Attitude Scale) Assessments ---
     def save_das(self, assessment: DASAssessment) -> int:
         query = "INSERT INTO das_assessments (timestamp, scores_json, total_score, top_vulnerabilities, notes) VALUES (?, ?, ?, ?, ?)"
@@ -658,6 +682,26 @@ class Database:
             conn.commit()
             return cursor.rowcount > 0
 
+    def complete_experiment(
+        self,
+        experiment_id: int,
+        actual_outcome: str,
+        actual_severity: int = 0,
+        fear_realized: bool = False,
+        conclusion: str = "",
+    ) -> Optional[BehavioralExperiment]:
+        exp = self.get_experiment(experiment_id)
+        if not exp:
+            return None
+        exp.actual_outcome = actual_outcome
+        exp.actual_severity = actual_severity
+        exp.fear_realized = 1 if fear_realized else 0
+        exp.conclusion = conclusion
+        exp.status = "completed"
+        exp.completed_at = datetime.now().isoformat()
+        self.update_experiment(exp)
+        return exp
+
     # --- Exposure Ladders & Steps ---
     def save_ladder(self, ladder: ExposureLadder) -> int:
         query = "INSERT INTO exposure_ladders (created_at, fear_theme, notes) VALUES (?, ?, ?)"
@@ -789,6 +833,10 @@ class Database:
             cursor.execute(query, (step_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    # Aliases for exposure ladder management
+    list_exposure_ladders = list_ladders
+    get_exposure_steps = list_exposure_steps
 
     # --- Backup & Restore ---
     def backup_all(self) -> Dict[str, Any]:

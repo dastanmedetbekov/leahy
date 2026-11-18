@@ -6,7 +6,20 @@ A terminal utility for mood tracking and cognitive restructuring powered by Cogn
 
 ## Features
 
-- **Strictly No Emojis**: Clean, professional terminal interface utilizing ASCII indicators (`[*]`, `[+]`, `[-]`, `[!]`, `[x]`, `[o]`, `#`, `|`).
+- **Strictly No Emojis**: Clean, professional interface utilizing ASCII indicators (`[*]`, `[+]`, `[-]`, `[!]`, `[x]`, `[o]`, `#`, `|`) in CLI and crisp minimal iconography in GUI.
+- **Modern Desktop GUI (`leahe gui` / `leahy web`)**:
+  - Built with the **Readest** stack: **Tauri v2** + **React 19** + **Tailwind CSS** + **Lucide Icons**.
+  - Minimalist GNOME Adwaita / Readest inspired dark aesthetic.
+  - Interactive 7-step CBT Thought Record wizard.
+  - Real-time animated Box Breathing (4-4-4-4) visual circle for distress regulation.
+  - Behavioral Experiments and David Burns Pleasure-Prediction tracking board.
+  - Connects directly to local SQLite (`~/.local/share/leahe/leahe.db`) and Markdown notes.
+- **Interactive Full Terminal TUI (`leahe tui` / `leahy dashboard`)**:
+  - Live full-screen terminal dashboard built with Rich.
+  - Single-key actions: `[c]` for check-in, `[t]` for CBT record, `[b]` for box breathing, `[g]` to launch GUI, `[q]` to exit.
+  - Live display of active streaks, average mood, distress relief, and recent history.
+- **Fast Terminal Search (`leahe search <query>`)**:
+  - Full-text search across past situations, automatic negative thoughts, and reframes directly from the shell.
 - **Anywhere Terminal Access (`leahy` / `leahe` / `mood`)**:
   - Install to `~/.local/bin` with `./leahe install-cli` or `pip install -e .` to execute `leahy` from any directory.
 - **Markdown Notes Storage in `~/Notes`**:

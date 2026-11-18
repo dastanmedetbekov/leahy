@@ -45,6 +45,8 @@ from .grounding import (
     run_478_breathing,
     run_54321_grounding,
 )
+from .tui import run_tui_dashboard
+from .server import run_server, DEFAULT_PORT
 from .stats import calculate_summary_stats
 from .export import export_to_json, export_to_markdown, export_to_yaml
 from .models import (
@@ -136,10 +138,12 @@ def main(ctx, db_path, notes_dir):
             console.print("  [4] Clinical Stats, DAS & Retrospective")
             console.print("  [5] Notes & Sync (Markdown in ~/Notes & YAML)")
             console.print("  [6] Settings & Reference Guides")
+            console.print("  [7] Interactive Terminal TUI Dashboard")
+            console.print("  [8] Open GUI Desktop (Tauri / Web)")
             console.print("  [0] Exit\n")
 
             try:
-                cat_choice = Prompt.ask("[bold cyan]Category (1-6)[/bold cyan]", default="0").strip().lower()
+                cat_choice = Prompt.ask("[bold cyan]Category (1-8)[/bold cyan]", default="0").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]Goodbye.[/dim]")
                 break
@@ -309,6 +313,12 @@ def main(ctx, db_path, notes_dir):
                     ctx.invoke(install_cli_cmd)
                 if not _pause_before_menu():
                     break
+
+            elif cat_choice == "7":
+                run_tui_dashboard(db)
+
+            elif cat_choice == "8":
+                ctx.invoke(gui_cmd)
 
             else:
                 console.print("[dim]Goodbye.[/dim]")
@@ -1384,6 +1394,57 @@ def seed_demo(ctx, count):
 
     console.print(f"[bold green][+] Inserted {inserted} realistic CBT demo records into database.[/bold green]")
     console.print("[dim]Run 'leahe stats' or 'leahe history' to see the analytics in action![/dim]")
+
+@main.command("tui")
+@click.pass_context
+def tui_cmd(ctx):
+    """Launch the interactive terminal dashboard."""
+    db = get_db(ctx)
+    run_tui_dashboard(db)
+
+@main.command("dashboard")
+@click.pass_context
+def dashboard_cmd(ctx):
+    """Alias for 'tui': Launch the interactive terminal dashboard."""
+    ctx.invoke(tui_cmd)
+
+@main.command("gui")
+@click.option("--port", default=DEFAULT_PORT, help="Port for local GUI server.")
+@click.option("--no-browser", is_flag=True, help="Do not automatically open browser.")
+@click.pass_context
+def gui_cmd(ctx, port, no_browser):
+    """Launch the Leahe GUI in desktop browser or window."""
+    import webbrowser
+    db = get_db(ctx)
+    console.print(f"[bold cyan][*] Starting Leahe GUI server on http://127.0.0.1:{port}[/bold cyan]")
+    console.print("[dim]Serving desktop React interface with zero external dependencies. Press Ctrl+C to stop.[/dim]")
+    if not no_browser:
+        webbrowser.open(f"http://127.0.0.1:{port}")
+    try:
+        server = run_server(db, port=port)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[dim]GUI server stopped.[/dim]")
+
+@main.command("web")
+@click.pass_context
+def web_cmd(ctx):
+    """Alias for 'gui': Launch the Leahe GUI."""
+    ctx.invoke(gui_cmd)
+
+@main.command("search")
+@click.argument("query")
+@click.option("-n", "--limit", default=20, help="Max entries to return.")
+@click.pass_context
+def search_cmd(ctx, query, limit):
+    """Search history for situations, thoughts, or notes."""
+    db = get_db(ctx)
+    results = db.list_entries(limit=limit, query=query)
+    if not results:
+        console.print(f"[yellow][*] No records found matching '{query}'.[/yellow]")
+        return
+    console.print(f"[bold cyan][+] Found {len(results)} records matching '{query}':[/bold cyan]")
+    render_entries_table(results)
 
 if __name__ == "__main__":
     main()
