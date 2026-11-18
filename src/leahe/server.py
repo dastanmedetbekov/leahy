@@ -22,6 +22,7 @@ from .models import (
     BehavioralExperiment,
     ExposureLadder,
     ExposureStep,
+    DASAssessment,
 )
 from .stats import calculate_summary_stats
 from .cbt_data import COGNITIVE_DISTORTIONS, STANDARD_EMOTIONS
@@ -250,6 +251,100 @@ class LeaheApiHandler(BaseHTTPRequestHandler):
             self._send_json(res)
             return
 
+        if path == "/api/actions":
+            is_done_str = query.get("is_done", [None])[0]
+            is_done = None
+            if is_done_str == "true":
+                is_done = True
+            elif is_done_str == "false":
+                is_done = False
+            actions = self.db.list_actions(is_done=is_done)
+            self._send_json([
+                {
+                    "id": a.id,
+                    "entry_id": a.entry_id,
+                    "created_at": a.created_at,
+                    "action_text": a.action_text,
+                    "is_done": a.is_done,
+                    "completed_at": a.completed_at,
+                }
+                for a in actions
+            ])
+            return
+
+        if path == "/api/das/questions":
+            from .das import DAS_QUESTIONS
+            self._send_json([
+                {
+                    "id": q.id,
+                    "text": q.text,
+                    "domain": q.domain,
+                    "rationale": q.rationale,
+                }
+                for q in DAS_QUESTIONS
+            ])
+            return
+
+        if path == "/api/das":
+            assessments = self.db.list_das()
+            self._send_json([
+                {
+                    "id": a.id,
+                    "timestamp": a.timestamp,
+                    "scores": json.loads(a.scores_json) if isinstance(a.scores_json, str) else a.scores_json,
+                    "total_score": a.total_score,
+                    "top_vulnerabilities": a.top_vulnerabilities,
+                    "notes": a.notes,
+                }
+                for a in assessments
+            ])
+            return
+
+        if path == "/api/methods":
+            from .burns_methods import BURNS_METHODS
+            self._send_json([
+                {
+                    "code": m.code,
+                    "name": m.name,
+                    "category": m.category,
+                    "summary": m.summary,
+                    "description": m.description,
+                    "when_to_use": m.when_to_use,
+                    "guided_prompts": m.guided_prompts,
+                    "example": m.example,
+                }
+                for m in BURNS_METHODS.values()
+            ])
+            return
+
+        if path == "/api/verify":
+            entries = self.db.get_all_entries()
+            cbt_entries = [e for e in entries if e.is_cbt]
+            unresolved = [
+                entry_to_dict(e)
+                for e in cbt_entries
+                if e.final_mood is not None and e.final_mood <= e.initial_mood
+            ]
+            severe_distress = [
+                entry_to_dict(e)
+                for e in entries
+                if e.initial_mood <= 3
+            ]
+            self._send_json({
+                "total_entries": len(entries),
+                "cbt_count": len(cbt_entries),
+                "unresolved_count": len(unresolved),
+                "unresolved": unresolved,
+                "severe_count": len(severe_distress),
+                "severe_entries": severe_distress,
+            })
+            return
+
+        if path == "/api/backup":
+            data = self.db.backup_all()
+            self._send_json(data)
+            return
+
         self._send_error("Endpoint not found", status=404)
 
     def do_POST(self):
@@ -369,6 +464,163 @@ class LeaheApiHandler(BaseHTTPRequestHandler):
                 self._send_error(f"Error syncing notes: {str(e)}", status=500)
             return
 
+        if path == "/api/ladders":
+            try:
+                ladder = ExposureLadder(
+                    fear_theme=payload.get("fear_theme", "New Exposure Ladder"),
+                    notes=payload.get("notes"),
+                )
+                ladder_id = self.db.save_ladder(ladder)
+                self._send_json({"id": ladder_id, "status": "created"}, status=201)
+            except Exception as e:
+                self._send_error(f"Error creating ladder: {str(e)}", status=400)
+            return
+
+        if path == "/api/ladders/build":
+            try:
+                from .ladder_builder import build_exposure_ladder
+                fear_theme = payload.get("fear_theme", "Custom Exposure Ladder")
+                notes = payload.get("notes")
+                steps_data = payload.get("steps", [])
+                ladder = build_exposure_ladder(
+                    db=self.db,
+                    fear_theme=fear_theme,
+                    ranked_steps=steps_data,
+                    notes=notes,
+                )
+                self._send_json({
+                    "id": ladder.id,
+                    "status": "created",
+                    "steps_count": len(ladder.steps),
+                }, status=201)
+            except Exception as e:
+                self._send_error(f"Error building ladder: {str(e)}", status=400)
+            return
+
+        if path.startswith("/api/ladders/") and path.endswith("/steps"):
+            try:
+                ladder_id = int(path.split("/")[3])
+                step = ExposureStep(
+                    ladder_id=ladder_id,
+                    step_order=int(payload.get("step_order", 1)),
+                    description=payload.get("description", ""),
+                    target_suds=int(payload.get("target_suds", 50)),
+                    notes=payload.get("notes"),
+                )
+                step_id = self.db.save_exposure_step(step)
+                self._send_json({"id": step_id, "status": "created"}, status=201)
+            except Exception as e:
+                self._send_error(f"Error adding exposure step: {str(e)}", status=400)
+            return
+
+        if path.startswith("/api/exposure-steps/") and path.endswith("/practice"):
+            try:
+                step_id = int(path.split("/")[3])
+                step = self.db.get_exposure_step(step_id)
+                if not step:
+                    self._send_error("Exposure step not found", status=404)
+                    return
+                pre_suds = int(payload.get("pre_suds", step.target_suds))
+                post_suds = int(payload.get("post_suds", 0))
+                step.last_pre_suds = pre_suds
+                step.last_post_suds = post_suds
+                step.repetitions_done = (step.repetitions_done or 0) + 1
+                if post_suds <= 30:
+                    step.status = "mastered"
+                    step.completed_at = datetime.now().isoformat()
+                else:
+                    step.status = "in_progress"
+                notes = payload.get("notes")
+                if notes:
+                    step.notes = f"{step.notes or ''} | {notes}".strip(" | ")
+                self.db.update_exposure_step(step)
+                self._send_json({"status": "updated", "id": step_id, "is_mastered": step.is_mastered})
+            except Exception as e:
+                self._send_error(f"Error recording practice: {str(e)}", status=400)
+            return
+
+        if path == "/api/actions":
+            try:
+                action = ActionItem(
+                    action_text=payload.get("action_text", ""),
+                    entry_id=payload.get("entry_id"),
+                )
+                action_id = self.db.save_action(action)
+                self._send_json({"id": action_id, "status": "created"}, status=201)
+            except Exception as e:
+                self._send_error(f"Error saving action: {str(e)}", status=400)
+            return
+
+        if path.startswith("/api/actions/") and path.endswith("/toggle"):
+            try:
+                action_id = int(path.split("/")[3])
+                done = bool(payload.get("done", True))
+                success = self.db.mark_action_done(action_id, done)
+                if not success:
+                    self._send_error("Action not found", status=404)
+                    return
+                self._send_json({"status": "updated", "id": action_id, "is_done": done})
+            except Exception as e:
+                self._send_error(f"Error updating action: {str(e)}", status=400)
+            return
+
+        if path == "/api/das":
+            try:
+                scores = payload.get("scores", {})
+                total_score = int(payload.get("total_score", 0))
+                top_vulnerabilities = payload.get("top_vulnerabilities", "")
+                notes = payload.get("notes")
+                assessment = DASAssessment(
+                    scores_json=json.dumps(scores) if isinstance(scores, (dict, list)) else str(scores),
+                    total_score=total_score,
+                    top_vulnerabilities=top_vulnerabilities,
+                    notes=notes,
+                )
+                das_id = self.db.save_das(assessment)
+                self._send_json({"id": das_id, "status": "created"}, status=201)
+            except Exception as e:
+                self._send_error(f"Error saving DAS assessment: {str(e)}", status=400)
+            return
+
+        if path == "/api/evaluate-thought":
+            try:
+                from .quality_check import evaluate_rational_response
+                report = evaluate_rational_response(
+                    automatic_thought=payload.get("automatic_thought", ""),
+                    alternative_thought=payload.get("alternative_thought", ""),
+                    belief_final=int(payload.get("belief_final", 80)),
+                    belief_initial=int(payload["belief_initial"]) if payload.get("belief_initial") is not None else None,
+                    distortions=payload.get("distortions", []),
+                )
+                self._send_json({
+                    "overall_score": report.overall_score,
+                    "rating": report.rating,
+                    "checks": [
+                        {"passed": c.passed, "criterion_name": c.criterion_name, "message": c.message}
+                        for c in report.checks
+                    ],
+                    "recommendations": report.recommendations,
+                })
+            except Exception as e:
+                self._send_error(f"Error evaluating thought: {str(e)}", status=400)
+            return
+
+        if path == "/api/restore":
+            try:
+                stats = self.db.restore_all(payload)
+                self._send_json({
+                    "status": "restored",
+                    "stats": {
+                        "entries": stats[0],
+                        "actions": stats[1],
+                        "tasks": stats[2],
+                        "experiments": stats[3],
+                    }
+                })
+            except Exception as e:
+                self._send_error(f"Error restoring backup: {str(e)}", status=400)
+            return
+
         self._send_error("Endpoint not found", status=404)
 
     def do_DELETE(self):
@@ -385,6 +637,66 @@ class LeaheApiHandler(BaseHTTPRequestHandler):
                     self._send_error("Entry not found", status=404)
             except ValueError:
                 self._send_error("Invalid entry ID", status=400)
+            return
+
+        if path.startswith("/api/experiments/"):
+            try:
+                exp_id = int(path.split("/")[-1])
+                success = self.db.delete_experiment(exp_id)
+                if success:
+                    self._send_json({"status": "deleted", "id": exp_id})
+                else:
+                    self._send_error("Experiment not found", status=404)
+            except ValueError:
+                self._send_error("Invalid experiment ID", status=400)
+            return
+
+        if path.startswith("/api/tasks/"):
+            try:
+                task_id = int(path.split("/")[-1])
+                success = self.db.delete_task(task_id)
+                if success:
+                    self._send_json({"status": "deleted", "id": task_id})
+                else:
+                    self._send_error("Task not found", status=404)
+            except ValueError:
+                self._send_error("Invalid task ID", status=400)
+            return
+
+        if path.startswith("/api/ladders/"):
+            try:
+                ladder_id = int(path.split("/")[-1])
+                success = self.db.delete_ladder(ladder_id)
+                if success:
+                    self._send_json({"status": "deleted", "id": ladder_id})
+                else:
+                    self._send_error("Ladder not found", status=404)
+            except ValueError:
+                self._send_error("Invalid ladder ID", status=400)
+            return
+
+        if path.startswith("/api/exposure-steps/"):
+            try:
+                step_id = int(path.split("/")[-1])
+                success = self.db.delete_exposure_step(step_id)
+                if success:
+                    self._send_json({"status": "deleted", "id": step_id})
+                else:
+                    self._send_error("Step not found", status=404)
+            except ValueError:
+                self._send_error("Invalid step ID", status=400)
+            return
+
+        if path.startswith("/api/actions/"):
+            try:
+                action_id = int(path.split("/")[-1])
+                success = self.db.delete_action(action_id)
+                if success:
+                    self._send_json({"status": "deleted", "id": action_id})
+                else:
+                    self._send_error("Action not found", status=404)
+            except ValueError:
+                self._send_error("Invalid action ID", status=400)
             return
 
         self._send_error("Endpoint not found", status=404)

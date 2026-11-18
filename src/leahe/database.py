@@ -431,6 +431,14 @@ class Database:
             conn.commit()
             return cursor.rowcount > 0
 
+    def delete_action(self, action_id: int) -> bool:
+        query = "DELETE FROM actions WHERE id = ?"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (action_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
     # --- Anti-Procrastination Tasks Management ---
     def save_task(self, task: AntiProcrastinationTask) -> int:
         query = """
@@ -544,10 +552,19 @@ class Database:
         self.update_task(task)
         return task
 
+    def delete_task(self, task_id: int) -> bool:
+        query = "DELETE FROM anti_procrastination_tasks WHERE id = ?"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (task_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
     # Aliases for task management
     list_procrastination_tasks = list_tasks
     save_procrastination_task = save_task
     complete_procrastination_task = complete_task
+    delete_procrastination_task = delete_task
 
     # --- DAS (Dysfunctional Attitude Scale) Assessments ---
     def save_das(self, assessment: DASAssessment) -> int:

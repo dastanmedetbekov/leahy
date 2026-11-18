@@ -174,10 +174,157 @@ def test_api_server_endpoints(test_db):
             comp_exp_res = json.loads(resp.read().decode("utf-8"))
             assert comp_exp_res["status"] == "completed"
 
-        # 8. Ladders (GET)
+        # 8. Ladders (POST, GET, steps, practice, DELETE)
+        post_ladder_payload = json.dumps({
+            "fear_theme": "Public Speaking",
+            "notes": "Testing exposure ladder",
+        }).encode("utf-8")
+        req_ladder = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/ladders",
+            data=post_ladder_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_ladder) as resp:
+            assert resp.status == 201
+            ladder_id = json.loads(resp.read().decode("utf-8"))["id"]
+
+        post_step_payload = json.dumps({
+            "description": "Say hello to audience",
+            "target_suds": 45,
+            "step_order": 1,
+        }).encode("utf-8")
+        req_step = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/ladders/{ladder_id}/steps",
+            data=post_step_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_step) as resp:
+            assert resp.status == 201
+            step_id = json.loads(resp.read().decode("utf-8"))["id"]
+
+        practice_step_payload = json.dumps({
+            "pre_suds": 45,
+            "post_suds": 20,
+        }).encode("utf-8")
+        req_prac = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/exposure-steps/{step_id}/practice",
+            data=practice_step_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_prac) as resp:
+            assert resp.status == 200
+            assert json.loads(resp.read().decode("utf-8"))["is_mastered"] is True
+
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ladders") as resp:
             ladders_data = json.loads(resp.read().decode("utf-8"))
-            assert isinstance(ladders_data, list)
+            assert len(ladders_data) == 1
+            assert ladders_data[0]["steps"][0]["is_mastered"] is True
+
+        # 9. Actions (POST, GET, toggle, DELETE)
+        post_action_payload = json.dumps({
+            "action_text": "Call doctor at 10 AM",
+        }).encode("utf-8")
+        req_action = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/actions",
+            data=post_action_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_action) as resp:
+            assert resp.status == 201
+            action_id = json.loads(resp.read().decode("utf-8"))["id"]
+
+        req_toggle = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/actions/{action_id}/toggle",
+            data=json.dumps({"done": True}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_toggle) as resp:
+            assert resp.status == 200
+            assert json.loads(resp.read().decode("utf-8"))["is_done"] is True
+
+        # 10. DAS (Questions, POST, GET)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/das/questions") as resp:
+            das_qs = json.loads(resp.read().decode("utf-8"))
+            assert len(das_qs) >= 10
+
+        post_das_payload = json.dumps({
+            "scores": {q["id"]: 3 for q in das_qs},
+            "total_score": 45,
+            "top_vulnerabilities": "Perfectionism",
+        }).encode("utf-8")
+        req_das = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/das",
+            data=post_das_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_das) as resp:
+            assert resp.status == 201
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/das") as resp:
+            das_hist = json.loads(resp.read().decode("utf-8"))
+            assert len(das_hist) >= 1
+
+        # 11. Burns Methods catalog & Verify audit
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/methods") as resp:
+            methods = json.loads(resp.read().decode("utf-8"))
+            assert len(methods) >= 10
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/verify") as resp:
+            audit = json.loads(resp.read().decode("utf-8"))
+            assert "total_entries" in audit
+            assert "unresolved_count" in audit
+
+        # 12. Evaluate Thought Quality
+        eval_payload = json.dumps({
+            "automatic_thought": "I will definitely fail the test and ruin my life",
+            "alternative_thought": "I have studied consistently, and even if I don't get top marks, my life continues and I can retake or improve.",
+            "belief_final": 80,
+            "belief_initial": 90,
+            "distortions": ["Catastrophizing", "Fortune Telling"],
+        }).encode("utf-8")
+        req_eval = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/evaluate-thought",
+            data=eval_payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_eval) as resp:
+            assert resp.status == 200
+            eval_res = json.loads(resp.read().decode("utf-8"))
+            assert eval_res["overall_score"] > 50
+
+        # 13. Backup & Restore
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/backup") as resp:
+            backup_data = json.loads(resp.read().decode("utf-8"))
+            assert "entries" in backup_data
+
+        req_restore = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/restore",
+            data=json.dumps(backup_data).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req_restore) as resp:
+            assert resp.status == 200
+            assert json.loads(resp.read().decode("utf-8"))["status"] == "restored"
+
+        # 14. DELETE endpoints
+        for del_url in [
+            f"http://127.0.0.1:{port}/api/exposure-steps/{step_id}",
+            f"http://127.0.0.1:{port}/api/ladders/{ladder_id}",
+            f"http://127.0.0.1:{port}/api/actions/{action_id}",
+            f"http://127.0.0.1:{port}/api/tasks/{task_id}",
+            f"http://127.0.0.1:{port}/api/experiments/{exp_id}",
+        ]:
+            req_del = urllib.request.Request(del_url, method="DELETE")
+            with urllib.request.urlopen(req_del) as resp:
+                assert resp.status == 200
 
     finally:
         server.shutdown()

@@ -870,6 +870,95 @@ def ladder_delete_cmd(ctx, ladder_id, yes):
     else:
         console.print(f"[red][!] Ladder #{ladder_id} not found.[/red]")
 
+@ladder_group.command("build")
+@click.argument("theme", required=False, default=None)
+@click.option("--items", "-i", multiple=True, help="Sub-fear situations (can specify multiple times).")
+@click.option("--notes", "-n", default=None, help="Additional context or notes.")
+@click.pass_context
+def ladder_build_cmd(ctx, theme, items, notes):
+    """Build a calibrated fear ladder via sub-fears brainstorming & pairwise comparison."""
+    from .ladder_builder import pairwise_sort, calculate_suds_distribution, build_exposure_ladder
+    from rich.table import Table
+
+    db: Database = get_db(ctx)
+
+    if not theme:
+        console.print("[bold cyan][*] Exposure Ladder Builder: Core Fear Theme[/bold cyan]")
+        theme = click.prompt("Enter core fear theme (e.g. Approaching attractive women & dating)", type=str).strip()
+
+    subfears = list(items) if items else []
+
+    if not subfears:
+        console.print("\n[bold cyan][*] Step 1: Dump / Brainstorm Your Sub-Fears[/bold cyan]")
+        console.print("[dim]Type each sub-fear / micro-exposure situation and press Enter.[/dim]")
+        console.print("[dim]When finished, simply press Enter on an empty line.[/dim]")
+        console.print("[dim]Examples:[/dim]")
+        console.print("[dim]  - Chat with a female friend[/dim]")
+        console.print("[dim]  - Chat with a female barista[/dim]")
+        console.print("[dim]  - Look an attractive girl in the eyes on street, say hi and walk away[/dim]")
+        console.print("[dim]  - Ask for an attractive girl's phone number or Instagram[/dim]\n")
+
+        idx = 1
+        while True:
+            val = click.prompt(f"Sub-fear #{idx} (or Enter to finish)", default="", show_default=False).strip()
+            if not val:
+                if len(subfears) < 2:
+                    console.print("[yellow][!] Please enter at least 2 sub-fear situations to rank.[/yellow]")
+                    continue
+                break
+            subfears.append(val)
+            idx += 1
+
+    if len(subfears) < 2:
+        console.print("[red][!] Need at least 2 situations to perform pairwise ranking.[/red]")
+        return
+
+    console.print(f"\n[bold yellow][*] Step 2: Pairwise Fear Comparison ({len(subfears)} situations)[/bold yellow]")
+    console.print("[dim]Compare two situations at a time: which one feels MORE intimidating or anxiety-provoking?[/dim]\n")
+
+    comparison_count = 0
+    def compare_situations(a: str, b: str) -> int:
+        nonlocal comparison_count
+        comparison_count += 1
+        console.print(f"\n[bold]Comparison #{comparison_count}:[/bold] Which situation feels [bold red]SCARIER / HARDER[/bold red]?")
+        console.print(f"  [bold cyan][1][/bold cyan] {a}")
+        console.print(f"  [bold magenta][2][/bold magenta] {b}")
+        choice = click.prompt("Choose (1 = first is scarier, 2 = second is scarier, = if equal)", default="1", type=str).strip().lower()
+        if choice in ("2", "b"):
+            return -1  # a is LESS scary than b
+        elif choice in ("1", "a"):
+            return 1   # a is MORE scary than b
+        return 0
+
+    sorted_subfears = pairwise_sort(subfears, compare_situations)
+    suds_values = calculate_suds_distribution(len(sorted_subfears))
+
+    # Render results table
+    table = Table(title=f"Calibrated Exposure Hierarchy: {theme}", show_header=True, header_style="bold magenta")
+    table.add_column("Step #", style="dim", width=8)
+    table.add_column("Target SUDS", style="bold yellow", width=14)
+    table.add_column("Situation / Micro-Exposure", style="bold white")
+
+    for i, (situation, suds) in enumerate(zip(sorted_subfears, suds_values), 1):
+        table.add_row(str(i), f"SUDS {suds}", situation)
+
+    console.print()
+    console.print(table)
+    console.print()
+
+    if click.confirm("Save this calibrated hierarchy to your database?", default=True):
+        ladder = build_exposure_ladder(
+            db=db,
+            fear_theme=theme,
+            ranked_steps=[{"description": s, "target_suds": sud} for s, sud in zip(sorted_subfears, suds_values)],
+            notes=notes,
+        )
+        console.print(f"[bold green][✓] Ladder #{ladder.id} '{ladder.fear_theme}' created with {len(ladder.steps)} graduated steps![/bold green]")
+        console.print("[dim]Run 'leahy ladder practice' or open GUI to start systematic desensitization.[/dim]")
+
+ladder_group.add_command(ladder_build_cmd, name="rank")
+ladder_group.add_command(ladder_build_cmd, name="compare")
+
 @main.command("verify")
 @click.pass_context
 def verify(ctx):

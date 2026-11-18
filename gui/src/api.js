@@ -42,6 +42,7 @@ export async function fetchEmotions() {
   return res.json();
 }
 
+// Behavioral Experiments
 export async function fetchExperiments() {
   const res = await fetch(`${API_BASE}/api/experiments`);
   return res.json();
@@ -65,6 +66,14 @@ export async function completeExperiment(id, data) {
   return res.json();
 }
 
+export async function deleteExperiment(id) {
+  const res = await fetch(`${API_BASE}/api/experiments/${id}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+// Anti-Procrastination Tasks
 export async function fetchTasks() {
   const res = await fetch(`${API_BASE}/api/tasks`);
   return res.json();
@@ -81,6 +90,158 @@ export async function createTask(task) {
 
 export async function completeTask(id, data) {
   const res = await fetch(`${API_BASE}/api/tasks/${id}/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteTask(id) {
+  const res = await fetch(`${API_BASE}/api/tasks/${id}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+// Exposure Ladders & Desensitization
+export async function fetchLadders() {
+  const res = await fetch(`${API_BASE}/api/ladders`);
+  return res.json();
+}
+
+export async function createLadder(data) {
+  const res = await fetch(`${API_BASE}/api/ladders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function buildLadder(data) {
+  const res = await fetch(`${API_BASE}/api/ladders/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function addLadderStep(ladderId, data) {
+  const res = await fetch(`${API_BASE}/api/ladders/${ladderId}/steps`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function practiceLadderStep(stepId, data) {
+  const res = await fetch(`${API_BASE}/api/exposure-steps/${stepId}/practice`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function deleteLadder(ladderId) {
+  const res = await fetch(`${API_BASE}/api/ladders/${ladderId}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+export async function deleteExposureStep(stepId) {
+  const res = await fetch(`${API_BASE}/api/exposure-steps/${stepId}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+// Action Items
+export async function fetchActions(isDone = null) {
+  const url = isDone !== null ? `${API_BASE}/api/actions?is_done=${isDone}` : `${API_BASE}/api/actions`;
+  const res = await fetch(url);
+  return res.json();
+}
+
+export async function createAction(data) {
+  const res = await fetch(`${API_BASE}/api/actions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function toggleAction(id, done) {
+  const res = await fetch(`${API_BASE}/api/actions/${id}/toggle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ done }),
+  });
+  return res.json();
+}
+
+export async function deleteAction(id) {
+  const res = await fetch(`${API_BASE}/api/actions/${id}`, {
+    method: "DELETE",
+  });
+  return res.json();
+}
+
+// Burns DAS Assessment
+export async function fetchDasQuestions() {
+  const res = await fetch(`${API_BASE}/api/das/questions`);
+  return res.json();
+}
+
+export async function fetchDasHistory() {
+  const res = await fetch(`${API_BASE}/api/das`);
+  return res.json();
+}
+
+export async function submitDas(data) {
+  const res = await fetch(`${API_BASE}/api/das`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+// Burns 10 Techniques Catalog
+export async function fetchMethods() {
+  const res = await fetch(`${API_BASE}/api/methods`);
+  return res.json();
+}
+
+// Clinical Audit / Verification
+export async function fetchVerifyAudit() {
+  const res = await fetch(`${API_BASE}/api/verify`);
+  return res.json();
+}
+
+// Thought Quality Evaluation (David Burns' Refutation Checker)
+export async function evaluateThought(data) {
+  const res = await fetch(`${API_BASE}/api/evaluate-thought`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+// Backup & Restore
+export async function fetchBackup() {
+  const res = await fetch(`${API_BASE}/api/backup`);
+  return res.json();
+}
+
+export async function restoreBackup(data) {
+  const res = await fetch(`${API_BASE}/api/restore`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),

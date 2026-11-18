@@ -255,6 +255,14 @@ class ExposureStep:
             return self.last_pre_suds - self.last_post_suds
         return None
 
+    @property
+    def suds_relief(self) -> Optional[int]:
+        return self.habituation_delta
+
+    @property
+    def is_mastered(self) -> bool:
+        return self.status == "mastered"
+
     @classmethod
     def from_row(cls, row: dict) -> "ExposureStep":
         return cls(
